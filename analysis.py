@@ -1,3 +1,4 @@
+
 # Univ. Michigan Aerostructural model.
 # Based on OpenAeroStruct by John Hwang, and John Jasa (github.com/mdolab/OpenAeroStruct)
 # author: Sam Friedman  (samfriedman@tamu.edu)
@@ -73,7 +74,7 @@ from vlm import VLMGeometry, AssembleAIC, AeroCirculations, VLMForces, VLMLiftDr
 from geometry import GeometryMesh#, Bspline, MonotonicConstraint
 from run_classes import OASProblem
 from openmdao.api import Component
-# from functionals import FunctionalBreguetRange, FunctionalEquilibrium
+from functionals import FunctionalBreguetRange, FunctionalEquilibrium
 
 # to disable OpenMDAO warnings which will create an error in Matlab
 import warnings
@@ -736,14 +737,205 @@ def transfer_loads(def_mesh, sec_forces, comp):
     return loads
 
 
+def vlm_lift_drag(sec_forces, alpha, comp):
+    """
+    Calculate total lift and drag in force units based on section forces.
+
+    Parameters
+    ----------
+    sec_forces[nx-1, ny-1, 3] : numpy array
+        Flattened array containing the sectional forces acting on each panel.
+        Stored in Fortran order (only relevant with more than one chordwise
+        panel).
+    alpha : float
+        Angle of attack in degrees.
+
+    Returns
+    -------
+    L : float
+        Total induced lift force for the lifting surface.
+    D : float
+        Total induced drag force for the lifting surface.
+
+    """
+    if not isinstance(comp, Component):
+        surface = comp
+        comp=VLMLiftDrag(surface)
+    params={
+        'sec_forces': sec_forces,
+        'alpha': alpha
+    }
+    unknowns={
+        'L': 0.,
+        'D': 0.
+    }
+    resids=None
+    comp.solve_nonlinear(params, unknowns, resids)
+    L=unknowns.get('L')
+    D=unknowns.get('D')
+    return L, D
+
+
+def vlm_coeffs(S_ref, L, D, v, rho, comp):
+    """ Compute lift and drag coefficients.
+
+    Parameters
+    ----------
+    S_ref : float
+        The reference areas of the lifting surface.
+    L : float
+        Total lift for the lifting surface.
+    D : float
+        Total drag for the lifting surface.
+    v : float
+        Freestream air velocity in m/s.
+    rho : float
+        Air density in kg/m^3.
+
+    Returns
+    -------
+    CL1 : float
+        Induced coefficient of lift (CL) for the lifting surface.
+    CDi : float
+        Induced coefficient of drag (CD) for the lifting surface.
+    """
+    if not isinstance(comp, Component):
+        surface = comp
+        comp = VLMCoeffs(surface)
+    params = {
+        'S_ref': S_ref,
+        'L': L,
+        'D': D,
+        'v': v,
+        'rho': rho
+    }
+    unknowns = {
+        'CL1': 0.,
+        'CDi': 0.
+    }
+    resids = None
+    comp.solve_nonlinear(params, unknowns, resids)
+    CL1 = unknowns.get('CL1', 0.)
+    CDi = unknowns.get('Cdi', 0.)
+    return CL1, CDi
+
+
+def total_lift(CL1, comp):
+    """ Calculate total lift in force units.
+
+    Parameters
+    ----------
+    CL1 : float
+        Induced coefficient of lift (CL) for the lifting surface.
+
+    Returns
+    -------
+    CL : float
+        Total coefficient of lift (CL) for the lifting surface.
+
+    """
+    if not isinstance(comp, Component):
+        surface = comp
+        comp = TotalLift(surface)
+    params = {
+        'CL1': CL1
+    }
+    unknowns = {
+        'CL': 0.
+    }
+    comp.solve_nonlinear(params, unknowns, resids)
+    CL = unknowns.get('CL', 0.)
+    return CL
+
+
+def total_drag(CDi, CDv, comp):
+    """ Calculate total drag in force units.
+
+    Parameters
+    ----------
+    CDi : float
+        Induced coefficient of drag (CD) for the lifting surface.
+    CDv : float
+        Calculated viscous drag for the lifting surface..
+
+    Returns
+    -------
+    CD : float
+        Total coefficient of drag (CD) for the lifting surface.
+
+    """
+    if not isinstance(comp, Component):
+        surface = comp
+        comp = TotalDrag(surface)
+    params = {
+        'CDi': CDi,
+        'CDv': CDv
+    }
+    unknowns = {
+        'CD': 0.
+    }
+    resids = None
+    comp.solve_nonlinear(params, unknowns, resids)
+    CD = unknowns.get('CD', 0.)
+    return CD
+
+
+def viscous_drag(Re, M, S_ref, cos_sweep, widths, lengths, comp, withViscous=True):
+    """
+    Compute the skin friction drag if the with_viscous option is True.
+
+    Parameters
+    ----------
+    re : float
+        Dimensionalized (1/length) Reynolds number. This is used to compute the
+        local Reynolds number based on the local chord length.
+    M : float
+        Mach number.
+    S_ref : float
+        The reference area of the lifting surface.
+    sweep : float
+        The angle (in degrees) of the wing sweep. This is used in the form
+        factor calculation.
+    widths[ny-1] : numpy array
+        The spanwise width of each panel.
+    lengths[ny] : numpy array
+        The sum of the lengths of each line segment along a chord section.
+
+    Returns
+    -------
+    CDv : float
+        Viscous drag coefficient for the lifting surface computed using flat
+        plate skin friction coefficient and a form factor to account for wing
+        shape.
+    """
+    if not isinstance(comp, Component):
+        surface = comp
+        comp=ViscousDrag(surface, withViscous)
+    params = {
+        're': Re,
+        'M': M,
+        'S_ref': S_ref,
+        'cos_sweep': cos_sweep,
+        'widths': widths,
+        'lengths': lengths
+    }
+    unknowns = {
+        'CDv': 0.
+    }
+    resids = None
+    comp.solve_nonlinear(params, unknowns, resids)
+    CDv = unknowns.get('CDv',0.0)
+    return CDv
+
+
 """
 ================================================================================
                                    STRUCTURES
 ================================================================================
 From spatialbeam.py: Define the structural analysis component using spatial beam theory. """
 
+"""
 def spatial_beam_fem(K, forces, comp):
-    """
     Compute the displacements and rotations by solving the linear system
     using the structural stiffness matrix.
     This component is copied from OpenMDAO's LinearSystem component with the
@@ -912,6 +1104,178 @@ def assemble_k(A, Iy, Iz, J, nodes, loads, comp):
     return K, forces
 
 
+def spatialbeam_energy(disp, loads, comp):
+    """ Compute strain energy.
+
+    Parameters
+    ----------
+    disp[ny, 6] : numpy array
+        Actual displacement array formed by truncating disp_aug.
+    loads[ny, 6] : numpy array
+        Array containing the loads applied on the FEM component,
+        computed from the sectional forces.
+
+    Returns
+    -------
+    energy : float
+        Total strain energy of the structural component.
+
+    """
+    if not isinstance(comp, Component):
+        surface = comp
+        comp = SpatialBeamEnergy(surface)
+    params = {
+        'disp': disp,
+        'loads': loads
+    }
+    unknowns = {
+        'energy': 0.
+    }
+    resids = None
+    comp.solve_nonlinear(params, unknowns, resids)
+    energy = unknowns.get('energy', 0.)
+    return energy
+
+
+def spatialbeam_weight(A, nodes, comp):
+    """ Compute total weight.
+
+    Parameters
+    ----------
+    A[ny-1] : numpy array
+        Areas for each FEM element.
+    nodes[ny, 3] : numpy array
+        Flattened array with coordinates for each FEM node.
+
+    Returns
+    -------
+    weight : float
+        Total weight of the structural component.
+    """
+    if not isinstance(comp, Component):
+        surface = comp
+        comp = SpatialBeamWeight(surface)
+    params = {
+        'A': A,
+        'nodes': nodes
+    }
+    unknowns = {
+        'weight': 0.
+    }
+    resids = None
+    comp.solve_nonlinear(params, unknowns, resids)
+    weight = unknowns.get('weight', 0.)
+    return weight
+
+def spatialbeam_vonmises_tube(r, nodes, disp, comp):
+    """ Compute the von Mises stress in each element.
+
+    Parameters
+    ----------
+    r[ny-1] : numpy array
+        Radii for each FEM element.
+    nodes[ny, 3] : numpy array
+        Flattened array with coordinates for each FEM node.
+    disp[ny, 6] : numpy array
+        Displacements of each FEM node.
+
+    Returns
+    -------
+    vonmises[ny-1, 2] : numpy array
+        von Mises stress magnitudes for each FEM element.
+
+    """
+    if not isinstance(comp, Component):
+        surface = comp
+        comp = SpatialBeamVonMisesTube(surface)
+    params = {
+        'nodes': nodes,
+        'r': r,
+        'disp': disp
+    }
+    unknowns = {
+        'vonmises': np.zeros((comp.ny-1, 2), dtype=data_type)
+    }
+    resids = None
+    comp.solve_nonlinear(params, unknowns, resids)
+    vonmises = unknowns.get('vonmises')
+    return vonmises
+
+
+def spatialbeam_failure_ks(vonmises, comp):
+    """
+    Aggregate failure constraints from the structure.
+
+    To simplify the optimization problem, we aggregate the individual
+    elemental failure constraints using a Kreisselmeier-Steinhauser (KS)
+    function.
+
+    The KS function produces a smoother constraint than using a max() function
+    to find the maximum point of failure, which produces a better-posed
+    optimization problem.
+
+    The rho parameter controls how conservatively the KS function aggregates
+    the failure constraints. A lower value is more conservative while a greater
+    value is more aggressive (closer approximation to the max() function).
+
+    Parameters
+    ----------
+    vonmises[ny-1, 2] : numpy array
+        von Mises stress magnitudes for each FEM element.
+
+    Returns
+    -------
+    failure : float
+        KS aggregation quantity obtained by combining the failure criteria
+        for each FEM node. Used to simplify the optimization problem by
+        reducing the number of constraints.
+
+    """
+    if not isinstace(comp, Component):
+        surface = comp
+        comp = SpatialBeamFailureKS(surface)
+    params = {
+        'vonmises': vonmises
+    }
+    unknowns = {
+        'failure': 0.
+    }
+    resids = None
+    comp.solve_nonlinear(params, unknowns, resids)
+    failure = unknowns.get('failure')
+    return failure
+
+
+def spatialbeam_failure_exact(vonmises, comp):
+    """
+    Outputs individual failure constraints on each FEM element.
+
+    Parameters
+    ----------
+    vonmises[ny-1, 2] : numpy array
+        von Mises stress magnitudes for each FEM element.
+
+    Returns
+    -------
+    failure[ny-1, 2] : numpy array
+        Array of failure conditions. Positive if element has failed.
+
+    """
+    if not isinstace(comp, Component):
+        surface = comp
+        comp = SpatialBeamFailureExact(surface)
+    params = {
+        'vonmises': vonmises
+    }
+    unknowns = {
+        'failure': np.zeros((comp.ny-1, 2), dtype=data_type)
+    }
+    resids = None
+    comp.solve_nonlinear(params, unknowns, resids)
+    failure = unknowns.get('failure')
+    return failure
+
+
 """
 ================================================================================
                                 MATERIALS
@@ -972,10 +1336,53 @@ def materials_tube(r, thickness, comp):
                                 FUNCTIONALS
 ================================================================================
     From functionals.py:
+    """
 
-        to be added here...
+def functional_breguet_range(surfaces, CL, CD, weight, prob_dict, comp):
+    """ Computes the fuel burn using the Breguet range equation """
+    if not isinstance(comp, Component):
+        surfaces = comp
+        comp = FunctionalBreguetRange(surfaces, prob_dict)
+    params = {}
+    for surface in surfaces:
+        name = surface['name']
+        params.update({
+            name+'CL': CL,
+            name+'CD': CD,
+            name+'weight': weight
+        })
+    unknowns = {
+        'fuelburn': 0.
+    }
+    resids = None
+    comp.solve_nonlinear(params, unknowns, resids)
+    fuelburn = unknowns.get('fuelburn', 0.)
+    return fuelburn
 
-        """
+
+def functional_equilibrium(surfaces, L, weight, fuelburn, prob_dict, comp):
+    """ L = W constraint """
+    if not isinstance(comp, Component):
+        surfaces = comp
+        comp = FunctionalEquilibrium(surfaces, prob_dict)
+    params = {}
+    for surface in surfaces:
+        name = surface['name']
+        params.update({
+            name+'L': L,
+            name+'weight': weight
+        })
+    params.update({
+        'fuelburn': fuelburn
+    })
+    unknowns = {
+        'eq_con': 0.
+    }
+    resids = None
+    comp.solve_nonlinear(params, unknowns, resids)
+    eq_con = unknowns.get('eq_con', 0.)
+    return eq_con
+
 
 
 if __name__ == "__main__":
