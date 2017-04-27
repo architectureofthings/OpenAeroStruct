@@ -6,30 +6,30 @@
 """
 analysis.py
 
-This module contains wrapper functions for each part of the multidisciplinary 
-analysis of the OpenAeroStruct model. Specifically, this is the 
-solve_nonlinear() method to each OpenMDAO component in OpenAeroStruct. To use 
-them, first call the setup() function, which returns an OASProblem object. This 
+This module contains wrapper functions for each part of the multidisciplinary
+analysis of the OpenAeroStruct model. Specifically, this is the
+solve_nonlinear() method to each OpenMDAO component in OpenAeroStruct. To use
+them, first call the setup() function, which returns an OASProblem object. This
 object contains the following attributes:
 
     OASProblem.prob_dict :   Dictionary of problem parameters
     OASProblem.surfaces  :   List of surface dictionaries defining properties of
                                 each lifting surface
-    OASProblem.comp_dict :   Dictionary of OpenAeroStruct component objects 
-                                which contain the analysis of each with a 
+    OASProblem.comp_dict :   Dictionary of OpenAeroStruct component objects
+                                which contain the analysis of each with a
                                 dictionary of problem parameters
 
-For each wrapper function, optionally pass in the necessary component object 
-from the comp_dict dictionary. Using pre-initialized components drastically 
-reduces the computation time for a full multidisciplinary analysis. Without 
+For each wrapper function, optionally pass in the necessary component object
+from the comp_dict dictionary. Using pre-initialized components drastically
+reduces the computation time for a full multidisciplinary analysis. Without
 pre-initialization of the component, another argument must be given to initialize
 the component within the function. This extra argument is usually the surface
-dictionary, but can be other problem or surface parameters. An example with 
-pre-initiazation is shown in aerodynamics() and structures(). A example without 
+dictionary, but can be other problem or surface parameters. An example with
+pre-initiazation is shown in aerodynamics() and structures(). A example without
 pre-initialization is shown in aerodynamics2() and structures2().
 
-An example of the multidisciplinary analysis of the coupled system is in the 
-if __name__=="__main__" function. It uses fixed point iteration to converge the 
+An example of the multidisciplinary analysis of the coupled system is in the
+if __name__=="__main__" function. It uses fixed point iteration to converge the
 coupled system of loads and displacements.
 
 Current list of function wrappers available:
@@ -46,15 +46,15 @@ Current list of function wrappers available:
     transfer_displacements
     transfer_loads
 
-For now, these functions only support a single lifting surface, and does not 
+For now, these functions only support a single lifting surface, and does not
 support B-spline customization of the lifting surface.
 
 Future work required:
     - Extend functions to be used with multiple lifting surfaces
-    - Write wrappers for remaining components in functionals.py, VLMFunctionals, 
+    - Write wrappers for remaining components in functionals.py, VLMFunctionals,
         SpatialBeamFunctionals
     - Fix BSpline surface customization
-    - Complete example of full multidisciplinary analysis in 
+    - Complete example of full multidisciplinary analysis in
         if __name__=="__main__" function
 
 """
@@ -67,9 +67,9 @@ import numpy as np
 import math
 
 from materials import MaterialsTube
-from spatialbeam import ComputeNodes, AssembleK, SpatialBeamFEM, SpatialBeamDisp#, SpatialBeamEnergy, SpatialBeamWeight, SpatialBeamVonMisesTube, SpatialBeamFailureKS
+from spatialbeam import ComputeNodes, AssembleK, SpatialBeamFEM, SpatialBeamDisp, SpatialBeamEnergy, SpatialBeamWeight, SpatialBeamVonMisesTube, SpatialBeamFailureExact, SpatialBeamFailureKS
 from transfer import TransferDisplacements, TransferLoads
-from vlm import VLMGeometry, AssembleAIC, AeroCirculations, VLMForces#, VLMLiftDrag, VLMCoeffs, TotalLift, TotalDrag
+from vlm import VLMGeometry, AssembleAIC, AeroCirculations, VLMForces, VLMLiftDrag, VLMCoeffs, TotalLift, TotalDrag, ViscousDrag
 from geometry import GeometryMesh#, Bspline, MonotonicConstraint
 from run_classes import OASProblem
 from openmdao.api import Component
@@ -205,11 +205,21 @@ def setup(prob_dict={}, surfaces=[{}]):
     comp_dict['AssembleAIC'] = AssembleAIC([surface])
     comp_dict['AeroCirculations'] = AeroCirculations(OAS_prob.prob_dict['tot_panels'])
     comp_dict['VLMForces'] = VLMForces([surface])
+    comp_dict['VLMLiftDrag'] = VLMLiftDrag(surface)
+    comp_dict['VLMCoeffs'] = VLMCoeffs(surface)
+    comp_dict['TotalLift'] = TotalLift(surface)
+    comp_dict['TotalDrag'] = TotalDrag(surface)
+    comp_dict['ViscousDrag'] = ViscousDrag(surface, OAS_prob.prob_dict['with_viscous'])
     comp_dict['TransferLoads'] = TransferLoads(surface)
     comp_dict['ComputeNodes'] = ComputeNodes(surface)
     comp_dict['AssembleK'] = AssembleK(surface)
     comp_dict['SpatialBeamFEM'] = SpatialBeamFEM(surface['FEMsize'])
     comp_dict['SpatialBeamDisp'] = SpatialBeamDisp(surface)
+    comp_dict['SpatialBeamEnergy'] = SpatialBeamEnergy(surface)
+    comp_dict['SpatialBeamWeight'] = SpatialBeamWeight(surface)
+    comp_dict['SpatialBeamVonMisesTube'] = SpatialBeamVonMisesTube(surface)
+    comp_dict['SpatialBeamFailureExact'] = SpatialBeamFailureExact(surface)
+    comp_dict['SpatialBeamFailureKS'] = SpatialBeamFailureKS(surface)
     OAS_prob.comp_dict = comp_dict
 
     return OAS_prob
@@ -339,7 +349,7 @@ def geometry_mesh(surface, comp=None):
     taper : float
         Taper ratio for the wing; 1 is untapered, 0 goes to a point at the tip.
     comp : (optional) OpenAeroStruct component object.
-    
+
     Returns
     -------
     mesh[nx, ny, 3] : numpy array
@@ -347,7 +357,7 @@ def geometry_mesh(surface, comp=None):
         the geometric design variables.
     """
     if not comp:
-        comp = GeometryMesh(surface) 
+        comp = GeometryMesh(surface)
     params = {}
     #
     # The following is copied from the __init__() method of GeometryMesh()
@@ -442,7 +452,7 @@ def transfer_displacements(mesh, disp, comp):
     """
     if not isinstance(comp, Component):
         surface = comp
-        comp = TransferDisplacements(surface)  
+        comp = TransferDisplacements(surface)
     params = {
         'mesh': mesh,
         'disp': disp
