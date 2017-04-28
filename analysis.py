@@ -221,6 +221,8 @@ def setup(prob_dict={}, surfaces=[{}]):
     comp_dict['SpatialBeamVonMisesTube'] = SpatialBeamVonMisesTube(surface)
     comp_dict['SpatialBeamFailureExact'] = SpatialBeamFailureExact(surface)
     comp_dict['SpatialBeamFailureKS'] = SpatialBeamFailureKS(surface)
+    comp_dict['FunctionalBreguetRange'] = FunctionalBreguetRange([surface], OAS_prob.prob_dict)
+    comp_dict['FunctionalEquilibrium'] = FunctionalEquilibrium([surface], OAS_prob.prob_dict)
     OAS_prob.comp_dict = comp_dict
 
     return OAS_prob
@@ -249,12 +251,27 @@ def aerodynamics(def_mesh, surface, prob_dict, comp_dict):
     size = prob_dict.get('tot_panels')
     rho = prob_dict.get('rho')
 
+    def_mesh = surface['def_mesh']
     b_pts, c_pts, widths, cos_sweep, lengths, normals, S_ref = vlm_geometry(def_mesh, comp_dict['VLMGeometry'])
     AIC, rhs= assemble_aic(surface, def_mesh, b_pts, c_pts, normals, v, alpha, comp_dict['AssembleAIC'])
     circulations = aero_circulations(AIC, rhs, comp_dict['AeroCirculations'])
     sec_forces = vlm_forces(surface, def_mesh, b_pts, circulations, alpha, v, rho, comp_dict['VLMForces'])
     loads = transfer_loads(def_mesh, sec_forces, comp_dict['TransferLoads'])
-
+    # store variables in surface dict
+    surface.update({
+        'b_pts': b_pts,
+        'c_pts': c_pts,
+        'widths': widths,
+        'cos_sweep': cos_sweep,
+        'lengths': lengths,
+        'normals': normals,
+        'S_ref': S_ref,
+        'loads': loads,
+        'sec_forces': sec_forces
+    })
+    prob_dict.update({
+        'sec_forces': sec_forces
+    })
     return loads
 
 
@@ -294,7 +311,14 @@ def structures(loads, surface, prob_dict, comp_dict):
     disp_aug = spatial_beam_fem(K, forces, comp_dict['SpatialBeamFEM'])
     disp = spatial_beam_disp(disp_aug, comp_dict['SpatialBeamDisp'])
     def_mesh = transfer_displacements(mesh, disp, comp_dict['TransferDisplacements'])
-
+    surface.update({
+        'K': K,
+        'forces': forces,
+        'nodes': nodes,
+        'def_mesh': def_mesh,
+        'disp_aug': disp_aug,
+        'disp': disp
+    })
     return def_mesh  # Output the def_mesh matrix
 
 
@@ -320,6 +344,62 @@ def structures2(loads, surface, prob_dict):
 
     return def_mesh  # Output the def_mesh matrix
 
+
+def aero_perf(surface, prob_dict, comp_dict):
+    # unpack surface variables
+    S_ref = surface.get('S_ref')
+    cos_sweep = surface.get('cos_sweep')
+    widths = surface.get('widths')
+    lengths = surface.get('lengths')
+    sec_forces = surface.get('sec_forces')
+    # unpack problem variables
+    M = prob_dict.get('M')
+    re = prob_dict.get('re')
+    rho = prob_dict.get('rho')
+    alpha = prob_dict.get('alpha')
+    v = prob_dict.get('v')
+
+    CDv = viscous_drag(re, M, S_ref, cos_sweep, widths, lengths, comp_dict['ViscousDrag'])
+    L, D = vlm_lift_drag(sec_forces, alpha, comp_dict['VLMLiftDrag'])
+    CL1, CDi = vlm_coeffs(S_ref, L, D, v, rho, comp_dict['VLMCoeffs'])
+    CL = total_lift(CL1, comp_dict['TotalLift'])
+    CD = total_drag(CDi, CDv, comp_dict['TotalDrag'])
+    # store surface variables in dict
+    surface.update({
+        'CDv': CDv,
+        'L': L,
+        'D': D,
+        'CL1': CL1,
+        'CDi': CDi,
+        'CL': CL,
+        'CD': CD
+    })
+    return
+
+
+
+def struct_perf(surface, prob_dict, comp_dict):
+    # unpack surface variables
+    disp = surface.get('disp')
+    loads = surface.get('loads')
+    nodes = surface.get('nodes')
+    r = surface.get('r')
+    A = surface.get('A')
+    energy = spatialbeam_energy(disp, loads, comp_dict['SpatialBeamEnergy'])
+    weight = spatialbeam_weight(A, nodes, comp_dict['SpatialBeamWeight'])
+    vonmises = spatialbeam_vonmises_tube(r, nodes, disp, comp_dict['SpatialBeamVonMisesTube'])
+    if surface['exact_failure_constraint']:
+        failure = spatialbeam_failure_exact(vonmises, comp_dict['SpatialBeamFailureExact'])
+    else:
+        failure = spatialbeam_failure_ks(vonmises, comp_dict['SpatialBeamFailureKS'])
+    # save surface variables
+    surface.update({
+        'energy': energy,
+        'weight': weight,
+        'vonmises': vonmises,
+        'failure': failure
+    })
+    return
 
 # def cp2pt(cp, jac):
 #     """
@@ -816,7 +896,7 @@ def vlm_coeffs(S_ref, L, D, v, rho, comp):
     resids = None
     comp.solve_nonlinear(params, unknowns, resids)
     CL1 = unknowns.get('CL1', 0.)
-    CDi = unknowns.get('Cdi', 0.)
+    CDi = unknowns.get('CDi', 0.)
     return CL1, CDi
 
 
@@ -843,6 +923,7 @@ def total_lift(CL1, comp):
     unknowns = {
         'CL': 0.
     }
+    resids = None
     comp.solve_nonlinear(params, unknowns, resids)
     CL = unknowns.get('CL', 0.)
     return CL
@@ -934,8 +1015,8 @@ def viscous_drag(Re, M, S_ref, cos_sweep, widths, lengths, comp, withViscous=Tru
 ================================================================================
 From spatialbeam.py: Define the structural analysis component using spatial beam theory. """
 
-"""
 def spatial_beam_fem(K, forces, comp):
+    """
     Compute the displacements and rotations by solving the linear system
     using the structural stiffness matrix.
     This component is copied from OpenMDAO's LinearSystem component with the
@@ -1231,7 +1312,7 @@ def spatialbeam_failure_ks(vonmises, comp):
         reducing the number of constraints.
 
     """
-    if not isinstace(comp, Component):
+    if not isinstance(comp, Component):
         surface = comp
         comp = SpatialBeamFailureKS(surface)
     params = {
@@ -1399,11 +1480,21 @@ if __name__ == "__main__":
     prob_dict = {} # use default
 
     # Define surface
-    surface = {
-        'wing_type' : 'CRM',
-        'num_x': 2,   # number of chordwise points
-        'num_y': 9    # number of spanwise points
-    }
+    surface = {'name' : 'wing',
+                 'symmetry' : True,
+                 'num_y' : 7,
+                 'num_x' : 2,
+                 'wing_type' : 'CRM',
+                 'CL0' : 0.2,
+                 'CD0' : 0.015,
+                #  'span_cos_spacing' : 1.,
+                #  'chord_cos_spacing' : .8
+                 }
+    # surface = {
+    #     'wing_type' : 'CRM',
+    #     'num_x': 2,   # number of chordwise points
+    #     'num_y': 9    # number of spanwise points
+    # }
 
     # Define fixed point iteration options
     # default options from OpenMDAO nonlinear solver NLGaussSeidel
@@ -1426,22 +1517,25 @@ if __name__ == "__main__":
     # print(OAS_prob.comp_dict)
 
     print('Run coupled system analysis with fixed point iteration')
-
+    comp_dict = OAS_prob.comp_dict
+    prob_dict = OAS_prob.prob_dict
     # Make local functions for coupled system analysis
-    def f_aero(def_mesh):
-        # loads = aerodynamics(def_mesh, OAS_prob.surfaces[0], OAS_prob.prob_dict, OAS_prob.comp_dict)
-        loads = aerodynamics2(def_mesh, OAS_prob.surfaces[0], OAS_prob.prob_dict)
+    def f_aero(def_mesh, surface):
+        loads = aerodynamics(def_mesh, surface, prob_dict, comp_dict)
+        # loads = aerodynamics2(def_mesh, OAS_prob.surfaces[0], OAS_prob.prob_dict)
         return loads
-    def f_struct(loads):
-        # def_mesh = structures(loads, OAS_prob.surfaces[0], OAS_prob.prob_dict, OAS_prob.comp_dict)
-        def_mesh = structures2(loads, OAS_prob.surfaces[0], OAS_prob.prob_dict)
+    def f_struct(loads, surface):
+        def_mesh = structures(loads, surface, prob_dict, comp_dict)
+        # def_mesh = structures2(loads, OAS_prob.surfaces[0], OAS_prob.prob_dict)
         return def_mesh
 
     # Define FPI parameters
     utol = fpi_opt['utol']
     maxiter = fpi_opt['maxiter']
     # Generate initial mesh with zero deformation
-    def_mesh = gen_init_mesh(OAS_prob.surfaces[0], OAS_prob.comp_dict)
+    def_mesh = gen_init_mesh(OAS_prob.surfaces[0], comp_dict)
+    OAS_prob.surfaces[0]['def_mesh'] = def_mesh
+    surface = OAS_prob.surfaces[0]
     x0 = def_mesh
     u_norm = 1.0e99
     iter_count = 0
@@ -1450,8 +1544,8 @@ if __name__ == "__main__":
           # Update iteration counter
           iter_count += 1
           # Run iteration and evaluate norm of residual
-          loads = f_aero(x0)
-          def_mesh = x = f_struct(loads)
+          loads = f_aero(x0, surface)
+          def_mesh = x = f_struct(loads, surface)
           u_norm = np.linalg.norm(x - x0)
           x0 = x
 
@@ -1463,3 +1557,11 @@ if __name__ == "__main__":
     print(msg)
     print('def_mesh=\n',def_mesh)
     print('loads=\n',loads)
+
+    print('Evaluate functional components...')
+    aero_perf(surface, prob_dict, comp_dict)
+    struct_perf(surface, prob_dict, comp_dict)
+    # print(surface['CL'], surface['CD'], surface['weight'])
+    fuelburn = functional_breguet_range([surface], surface['CL'], surface['CD'], surface['weight'], prob_dict, comp_dict['FunctionalBreguetRange'])
+    eq_con = functional_equilibrium([surface], surface['L'], surface['weight'], fuelburn, prob_dict, comp_dict['FunctionalEquilibrium'])
+    print('fuelburn=',fuelburn.real)
