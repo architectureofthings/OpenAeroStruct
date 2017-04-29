@@ -38,6 +38,10 @@ Current list of function wrappers available:
     assemble_aic
     aero_circulations
     vlm_forces
+    vlm_coeffs
+    vlm_lift_drag
+    total_lift
+    total_drag
     compute_nodes
     assemble_k
     spatial_beam_fem
@@ -46,6 +50,12 @@ Current list of function wrappers available:
     geometry_mesh
     transfer_displacements
     transfer_loads
+    spatialbeam_energy
+    spatialbeam_weight
+    spatialbeam_failure_ks
+    spatialbeam_failure_exact
+    functional_breguet_range
+    functional_equilibrium
 
 For now, these functions only support a single lifting surface, and does not
 support B-spline customization of the lifting surface.
@@ -1476,25 +1486,17 @@ if __name__ == "__main__":
      }
     '''
     print('Fortran Flag = {0}'.format(fortran_flag))
+
     # Define parameters
-    prob_dict = {} # use default
+    prob_dict = {'type':'aerostruct'} # use default
 
     # Define surface
-    surface = {'name' : 'wing',
-                 'symmetry' : True,
-                 'num_y' : 7,
-                 'num_x' : 2,
-                 'wing_type' : 'CRM',
-                 'CL0' : 0.2,
-                 'CD0' : 0.015,
-                #  'span_cos_spacing' : 1.,
-                #  'chord_cos_spacing' : .8
-                 }
-    # surface = {
-    #     'wing_type' : 'CRM',
-    #     'num_x': 2,   # number of chordwise points
-    #     'num_y': 9    # number of spanwise points
-    # }
+    surface = {
+        'name': 'wing',
+        'wing_type' : 'CRM',
+        'num_x': 2,   # number of chordwise points
+        'num_y': 9    # number of spanwise points
+    }
 
     # Define fixed point iteration options
     # default options from OpenMDAO nonlinear solver NLGaussSeidel
@@ -1504,39 +1506,40 @@ if __name__ == "__main__":
         # 'print': int(0),        # Print option (unused)
         'maxiter': int(100),    # Maximum number of iterations
         # 'rtol': float(1e-06),   # Relative convergence tolerance (unused)
-        'utol': float(1e-12)    # Convergence tolerance on the change in the unknowns
+        'utol': float(1e-16)    # Convergence tolerance on the change in the unknowns
     }
 
     print('Run analysis.setup()')
-    OAS_prob = setup(prob_dict=prob_dict, surfaces=[surface])
-    # print('OAS_prob.surfaces = ')
-    # print(OAS_prob.surfaces)
-    # print('OAS_prob.prob_dict = ')
-    # print(OAS_prob.prob_dict)
-    # print('OAS_prob.comp_dict = ')
-    # print(OAS_prob.comp_dict)
+
+    OASprob = setup(prob_dict, [surface])
+
+    # Using standard method in run_classes.py
+    stdOASprob = OASProblem(prob_dict)
+    stdOASprob.add_surface(surface)
+    stdOASprob.setup()
+    stdOASprob.run()
 
     print('Run coupled system analysis with fixed point iteration')
-    comp_dict = OAS_prob.comp_dict
-    prob_dict = OAS_prob.prob_dict
     # Make local functions for coupled system analysis
     def f_aero(def_mesh, surface):
-        loads = aerodynamics(def_mesh, surface, prob_dict, comp_dict)
-        # loads = aerodynamics2(def_mesh, OAS_prob.surfaces[0], OAS_prob.prob_dict)
+        loads = aerodynamics(def_mesh, surface, OASprob.prob_dict, OASprob.comp_dict)
+        # loads = aerodynamics2(def_mesh, OASprob.surfaces[0], OASprob.OASprob.prob_dict)
         return loads
     def f_struct(loads, surface):
-        def_mesh = structures(loads, surface, prob_dict, comp_dict)
-        # def_mesh = structures2(loads, OAS_prob.surfaces[0], OAS_prob.prob_dict)
+        def_mesh = structures(loads, surface, OASprob.prob_dict, OASprob.comp_dict)
+        # def_mesh = structures2(loads, OASprob.surfaces[0], OASprob.OASprob.prob_dict)
         return def_mesh
 
     # Define FPI parameters
     utol = fpi_opt['utol']
     maxiter = fpi_opt['maxiter']
     # Generate initial mesh with zero deformation
-    def_mesh = gen_init_mesh(OAS_prob.surfaces[0], comp_dict)
-    OAS_prob.surfaces[0]['def_mesh'] = def_mesh
-    surface = OAS_prob.surfaces[0]
-    x0 = def_mesh
+    def_mesh = gen_init_mesh(OASprob.surfaces[0], OASprob.comp_dict)
+    OASprob.surfaces[0]['def_mesh'] = def_mesh
+    surface = OASprob.surfaces[0]
+    x0 = f_aero(def_mesh, surface)*0.0
+    # x0 = np.zeros((f_aero(def_mesh,surface).size))
+    print(x0)
     u_norm = 1.0e99
     iter_count = 0
     # Run fixed point iteration on coupled aerodynamics-structures system
@@ -1544,8 +1547,8 @@ if __name__ == "__main__":
           # Update iteration counter
           iter_count += 1
           # Run iteration and evaluate norm of residual
-          loads = f_aero(x0, surface)
-          def_mesh = x = f_struct(loads, surface)
+          loads = x = aerodynamics(x0, surface, OASprob.prob_dict, OASprob.comp_dict)
+          def_mesh = structures(loads, surface, OASprob.prob_dict, OASprob.comp_dict)
           u_norm = np.linalg.norm(x - x0)
           x0 = x
 
@@ -1555,13 +1558,35 @@ if __name__ == "__main__":
         msg = 'Converged in {0:d} iterations'.format(iter_count)
 
     print(msg)
-    print('def_mesh=\n',def_mesh)
-    print('loads=\n',loads)
+
+    print('  -----  TEST ACCURACY  -----   ')
+    print('variable  |   analysis.py   |   run_classes.py')
+    print('----------------------------------------------')
+    var = 'b_pts'
+    print('{0:9s}|{a[b_pts]}|{b[coupled.wing.b_pts]}'.format(var,a=surface,b=stdOASprob.prob))
+    # b_pts, c_pts, widths, cos_sweep, lengths, normals, S_ref = vlm_geometry(def_mesh, comp_dict['VLMGeometry'])
+    # AIC, rhs= assemble_aic(surface, def_mesh, b_pts, c_pts, normals, v, alpha, comp_dict['AssembleAIC'])
+    # circulations = aero_circulations(AIC, rhs, comp_dict['AeroCirculations'])
+    # sec_forces = vlm_forces(surface, def_mesh, b_pts, circulations, alpha, v, rho, comp_dict['VLMForces'])
+    # loads = transfer_loads(def_mesh, sec_forces, comp_dict['TransferLoads'])
+
+
+    print('def_mesh=\n',def_mesh.real)
+    print('stdOASprob def_mesh=\n',stdOASprob.prob['coupled.wing.def_mesh'])
+    print('def_mesh error=\n',def_mesh.real-stdOASprob.prob['coupled.wing.def_mesh'])
+    print('np.linalg.norm(def_mesh error)=',np.linalg.norm(def_mesh.real-stdOASprob.prob['coupled.wing.def_mesh']))
+
+
+    print('loads=\n',loads.real)
+    print('stdOASprob loads=\n',stdOASprob.prob['coupled.wing.loads'])
+    print('loads error=\n',loads.real-stdOASprob.prob['coupled.wing.loads'])
+    print('np.linalg.norm(loads error)=',np.linalg.norm(loads.real-stdOASprob.prob['coupled.wing.loads']))
 
     print('Evaluate functional components...')
-    aero_perf(surface, prob_dict, comp_dict)
-    struct_perf(surface, prob_dict, comp_dict)
+    aero_perf(surface, OASprob.prob_dict, OASprob.comp_dict)
+    struct_perf(surface, OASprob.prob_dict, OASprob.comp_dict)
     # print(surface['CL'], surface['CD'], surface['weight'])
-    fuelburn = functional_breguet_range([surface], surface['CL'], surface['CD'], surface['weight'], prob_dict, comp_dict['FunctionalBreguetRange'])
-    eq_con = functional_equilibrium([surface], surface['L'], surface['weight'], fuelburn, prob_dict, comp_dict['FunctionalEquilibrium'])
+    fuelburn = functional_breguet_range([surface], surface['CL'], surface['CD'], surface['weight'], OASprob.prob_dict, OASprob.comp_dict['FunctionalBreguetRange'])
+    eq_con = functional_equilibrium([surface], surface['L'], surface['weight'], fuelburn, OASprob.prob_dict, OASprob.comp_dict['FunctionalEquilibrium'])
     print('fuelburn=',fuelburn.real)
+    print('stdOASprob.prob[fuelburn]=',stdOASprob.prob['fuelburn'])
