@@ -6,30 +6,30 @@
 """
 analysis.py
 
-This module contains wrapper functions for each part of the multidisciplinary 
-analysis of the OpenAeroStruct model. Specifically, this is the 
-solve_nonlinear() method to each OpenMDAO component in OpenAeroStruct. To use 
-them, first call the setup() function, which returns an OASProblem object. This 
+This module contains wrapper functions for each part of the multidisciplinary
+analysis of the OpenAeroStruct model. Specifically, this is the
+solve_nonlinear() method to each OpenMDAO component in OpenAeroStruct. To use
+them, first call the setup() function, which returns an OASProblem object. This
 object contains the following attributes:
 
     OASProblem.prob_dict :   Dictionary of problem parameters
     OASProblem.surfaces  :   List of surface dictionaries defining properties of
                                 each lifting surface
-    OASProblem.comp_dict :   Dictionary of OpenAeroStruct component objects 
-                                which contain the analysis of each with a 
+    OASProblem.comp_dict :   Dictionary of OpenAeroStruct component objects
+                                which contain the analysis of each with a
                                 dictionary of problem parameters
 
-For each wrapper function, optionally pass in the necessary component object 
-from the comp_dict dictionary. Using pre-initialized components drastically 
-reduces the computation time for a full multidisciplinary analysis. Without 
+For each wrapper function, optionally pass in the necessary component object
+from the comp_dict dictionary. Using pre-initialized components drastically
+reduces the computation time for a full multidisciplinary analysis. Without
 pre-initialization of the component, another argument must be given to initialize
 the component within the function. This extra argument is usually the surface
-dictionary, but can be other problem or surface parameters. An example with 
-pre-initiazation is shown in aerodynamics() and structures(). A example without 
+dictionary, but can be other problem or surface parameters. An example with
+pre-initiazation is shown in aerodynamics() and structures(). A example without
 pre-initialization is shown in aerodynamics2() and structures2().
 
-An example of the multidisciplinary analysis of the coupled system is in the 
-if __name__=="__main__" function. It uses fixed point iteration to converge the 
+An example of the multidisciplinary analysis of the coupled system is in the
+if __name__=="__main__" function. It uses fixed point iteration to converge the
 coupled system of loads and displacements.
 
 Current list of function wrappers available:
@@ -46,15 +46,15 @@ Current list of function wrappers available:
     transfer_displacements
     transfer_loads
 
-For now, these functions only support a single lifting surface, and does not 
+For now, these functions only support a single lifting surface, and does not
 support B-spline customization of the lifting surface.
 
 Future work required:
     - Extend functions to be used with multiple lifting surfaces
-    - Write wrappers for remaining components in functionals.py, VLMFunctionals, 
+    - Write wrappers for remaining components in functionals.py, VLMFunctionals,
         SpatialBeamFunctionals
     - Fix BSpline surface customization
-    - Complete example of full multidisciplinary analysis in 
+    - Complete example of full multidisciplinary analysis in
         if __name__=="__main__" function
 
 """
@@ -72,7 +72,7 @@ from transfer import TransferDisplacements, TransferLoads
 from vlm import VLMGeometry, AssembleAIC, AeroCirculations, VLMForces#, VLMLiftDrag, VLMCoeffs, TotalLift, TotalDrag
 from geometry import GeometryMesh#, Bspline, MonotonicConstraint
 from run_classes import OASProblem
-from openmdao.api import Component
+from openmdao.api import Component, Problem, Group
 # from functionals import FunctionalBreguetRange, FunctionalEquilibrium
 
 # to disable OpenMDAO warnings which will create an error in Matlab
@@ -339,7 +339,7 @@ def geometry_mesh(surface, comp=None):
     taper : float
         Taper ratio for the wing; 1 is untapered, 0 goes to a point at the tip.
     comp : (optional) OpenAeroStruct component object.
-    
+
     Returns
     -------
     mesh[nx, ny, 3] : numpy array
@@ -347,7 +347,7 @@ def geometry_mesh(surface, comp=None):
         the geometric design variables.
     """
     if not comp:
-        comp = GeometryMesh(surface) 
+        comp = GeometryMesh(surface)
     params = {}
     #
     # The following is copied from the __init__() method of GeometryMesh()
@@ -378,9 +378,11 @@ def geometry_mesh(surface, comp=None):
         geo_params[param] = val
         if var in surface['active_geo_vars']:
             params.update({param: val})
+    print(params)
     unknowns = {
         'mesh': comp.mesh
     }
+    print(unknowns)
     resids = None
     comp.solve_nonlinear(params, unknowns, resids)
     mesh = unknowns.get('mesh')
@@ -442,7 +444,7 @@ def transfer_displacements(mesh, disp, comp):
     """
     if not isinstance(comp, Component):
         surface = comp
-        comp = TransferDisplacements(surface)  
+        comp = TransferDisplacements(surface)
     params = {
         'mesh': mesh,
         'disp': disp
@@ -967,6 +969,364 @@ def materials_tube(r, thickness, comp):
 
         """
 
+def aerodymanics3(def_mesh, AeroProb):
+    AeroProb['def_mesh'] = def_mesh
+    AeroProb.run()
+    return AeroProb['loads']
+
+def structures3(loads, StructProb):
+    StructProb['loads'] = loads
+    StructProb.run()
+    return StructProb['def_mesh']
+
+def setup_AeroProb(prob_dict={}, surfaces=[{}]):
+    """
+    Specific method to add the necessary components to the problem for an
+    aerodynamic problem.
+    """
+
+    # Set problem type
+    prob_dict.update({'type' : 'aero'})
+
+    # Instantiate problem
+    AeroProb = Problem()
+
+    for surface in surfaces:
+        # Add SpatialBeamFEM size
+        FEMsize = 6 * surface['num_y'] + 6
+        surface.update({'FEMsize': FEMsize})
+        # Add the specified wing surface to the problem.
+        OAS_prob.add_surface(surface)
+
+    # Add materials properties for the wing surface to the surface dict in OAS_prob
+    for idx, surface in enumerate(OAS_prob.surfaces):
+        A, Iy, Iz, J = materials_tube(surface['r'], surface['t'], surface)
+        OAS_prob.surfaces[idx].update({
+            'A': A,
+            'Iy': Iy,
+            'Iz': Iz,
+            'J': J
+        })
+
+    # Get total panels and save in prob_dict
+    tot_panels = 0
+    for surface in OAS_prob.surfaces:
+        ny = surface['num_y']
+        nx = surface['num_x']
+        tot_panels += (nx - 1) * (ny - 1)
+    OAS_prob.prob_dict.update({'tot_panels': tot_panels})
+
+    # Assume we are only using a single lifting surface for now
+    surface = OAS_prob.surfaces[0]
+
+    # Set the problem name if the user doesn't
+    if 'prob_name' not in self.prob_dict.keys():
+        self.prob_dict['prob_name'] = 'aero'
+
+    # Create the base root-level group
+    root = Group()
+
+    # Create the problem and assign the root group
+    self.prob = Problem()
+    self.prob.root = root
+
+    # Loop over each surface in the surfaces list
+    for surface in self.surfaces:
+
+        # Get the surface name and create a group to contain components
+        # only for this surface
+        name = surface['name']
+        tmp_group = Group()
+
+        # Add independent variables that do not belong to a specific component
+        # indep_vars = [('disp', np.zeros((surface['num_y'], 6), dtype=data_type))]
+        indep_vars = [('def_mesh', np.zeros((surface['num_y'], 6), dtype=data_type))]
+
+        for var in surface['active_geo_vars']:
+            indep_vars.append((var, surface[var]))
+
+        # Add aero components to the surface-specific group
+        tmp_group.add('indep_vars',
+                 IndepVarComp(indep_vars),
+                 promotes=['*'])
+        tmp_group.add('mesh',
+                 GeometryMesh(surface),
+                 promotes=['*'])
+        tmp_group.add('def_mesh',
+                 TransferDisplacements(surface),
+                 promotes=['*'])
+        tmp_group.add('vlmgeom',
+                 VLMGeometry(surface),
+                 promotes=['*'])
+        # Add bspline components for active bspline geometric variables
+        for var in surface['active_bsp_vars']:
+            n_pts = surface['num_y']
+            if var == 'thickness_cp':
+                n_pts -= 1
+            trunc_var = var.split('_')[0]
+            tmp_group.add(trunc_var + '_bsp',
+                     Bspline(var, trunc_var, surface['num_'+var], n_pts),
+                     promotes=['*'])
+        if surface['monotonic_con'] is not None:
+            if type(surface['monotonic_con']) is not list:
+                surface['monotonic_con'] = [surface['monotonic_con']]
+            for var in surface['monotonic_con']:
+                tmp_group.add('monotonic_' + var,
+                    MonotonicConstraint(var, surface), promotes=['*'])
+
+# -----------------------------------------------------------
+
+        # Add tmp_group to the problem as the name of the surface.
+        # Note that is a group and performance group for each
+        # individual surface.
+        name_orig = name.strip('_')
+        root.add(name_orig, tmp_group, promotes=[])
+        root.add(name_orig+'_perf', VLMFunctionals(surface, self.prob_dict),
+                promotes=["v", "alpha", "M", "re", "rho"])
+
+    # Add problem information as an independent variables component
+    if self.prob_dict['Re'] == 0:
+        Error('Reynolds number must be greater than zero for viscous drag ' +
+        'calculation. If only inviscid drag is desired, set with_viscous ' +
+        'flag to False.')
+
+    prob_vars = [('v', self.prob_dict['v']),
+        ('alpha', self.prob_dict['alpha']),
+        ('M', self.prob_dict['M']),
+        ('re', self.prob_dict['Re']/self.prob_dict['reynolds_length']),
+        ('rho', self.prob_dict['rho'])]
+    root.add('prob_vars',
+             IndepVarComp(prob_vars),
+             promotes=['*'])
+
+    # Add a single 'aero_states' component that solves for the circulations
+    # and forces from all the surfaces.
+    # While other components only depends on a single surface,
+    # this component requires information from all surfaces because
+    # each surface interacts with the others.
+    root.add('aero_states',
+             VLMStates(self.surfaces),
+             promotes=['circulations', 'v', 'alpha', 'rho'])
+
+    # Explicitly connect parameters from each surface's group and the common
+    # 'aero_states' group.
+    # This is necessary because the VLMStates component requires information
+    # from each surface, but this information is stored within each
+    # surface's group.
+    for surface in self.surfaces:
+        name = surface['name']
+
+        # Perform the connections with the modified names within the
+        # 'aero_states' group.
+        root.connect(name[:-1] + '.def_mesh', 'aero_states.' + name + 'def_mesh')
+        root.connect(name[:-1] + '.b_pts', 'aero_states.' + name + 'b_pts')
+        root.connect(name[:-1] + '.c_pts', 'aero_states.' + name + 'c_pts')
+        root.connect(name[:-1] + '.normals', 'aero_states.' + name + 'normals')
+
+        # Connect the results from 'aero_states' to the performance groups
+        root.connect('aero_states.' + name + 'sec_forces', name + 'perf' + '.sec_forces')
+
+        # Connect S_ref for performance calcs
+        root.connect(name[:-1] + '.S_ref', name + 'perf' + '.S_ref')
+        root.connect(name[:-1] + '.widths', name + 'perf' + '.widths')
+        root.connect(name[:-1] + '.lengths', name + 'perf' + '.lengths')
+        root.connect(name[:-1] + '.cos_sweep', name + 'perf' + '.cos_sweep')
+
+    # Actually set up the problem
+    self.setup_prob()
+
+class OASCoupledProblem(OASProblem):
+    def __init__(self, input_dict={}):
+        super(OASCoupledProblem, self).__init__(input_dict)
+        # New coupled analysis setup functions
+        if self.prob_dict['type'] = 'coupledsetup':
+            self.setup = self.setup_coupledsetup
+        if self.prob_dict['type'] = 'coupledaero':
+            self.setup = self.setup_coupledaero
+        if self.prob_dict['type'] = 'coupledstruct':
+            self.setup = self.setup_coupledstruct
+
+    def self.setup_coupledsetup(self):
+        """
+        Specific method to add the necessary components to the problem for a
+        structural problem.
+        """
+
+        # Set the problem name if the user doesn't
+        if 'prob_name' not in self.prob_dict.keys():
+            self.prob_dict['prob_name'] = 'struct'
+
+        # Create the base root-level group
+        root = Group()
+
+        # Create the problem and assign the root group
+        self.prob = Problem()
+        self.prob.root = root
+
+        # Loop over each surface in the surfaces list
+        for surface in self.surfaces:
+
+            # Get the surface name and create a group to contain components
+            # only for this surface.
+            # This group's name is whatever the surface's name is.
+            # The default is 'wing'.
+            name = surface['name']
+            tmp_group = Group()
+
+            # Add independent variables that do not belong to a specific component.
+            # Note that these are the only ones necessary for structual-only
+            # analysis and optimization.
+            indep_vars = [('r', surface['r']), ('loads', surface['loads'])]
+            for var in surface['active_geo_vars']:
+                indep_vars.append((var, surface[var]))
+
+            # Add structural components to the surface-specific group
+            tmp_group.add('indep_vars',
+                     IndepVarComp(indep_vars),
+                     promotes=['*'])
+            tmp_group.add('mesh',
+                     GeometryMesh(surface),
+                     promotes=['*'])
+            tmp_group.add('tube',
+                     MaterialsTube(surface),
+                     promotes=['*'])
+
+            # Add bspline components for active bspline geometric variables
+            for var in surface['active_bsp_vars']:
+                n_pts = surface['num_y']
+                if var == 'thickness_cp':
+                    n_pts -= 1
+                trunc_var = var.split('_')[0]
+                tmp_group.add(trunc_var + '_bsp',
+                         Bspline(var, trunc_var, surface['num_'+var], n_pts),
+                         promotes=['*'])
+
+            # Add tmp_group to the problem with the name of the surface.
+            # The default is 'wing'.
+            root.add(name[:-1], tmp_group, promotes=[])
+
+        # Actually set up the problem
+        self.setup_prob()
+
+    def self.setup_coupledaero(self):
+        """
+        Specific method to add the necessary components to the problem for an
+        coupled-only aerodynamic problem.
+        """
+        # Set the problem name if the user doesn't
+        if 'prob_name' not in self.prob_dict.keys():
+            self.prob_dict['prob_name'] = 'coupledaero'
+
+        # Create the base root-level group
+        root = Group()
+
+        # Create the problem and assign the root group
+        self.prob = Problem()
+        self.prob.root = root
+
+        # Loop over each surface in the surfaces list
+        for surface in self.surfaces:
+
+            # Get the surface name and create a group to contain components
+            # only for this surface
+            name = surface['name']
+            tmp_group = Group()
+
+            # Add independent variables that do not belong to a specific component
+            indep_vars = [('disp', np.zeros((surface['num_y'], 6), dtype=data_type))]
+            for var in surface['active_geo_vars']:
+                indep_vars.append((var, surface[var]))
+
+            # Add aero components to the surface-specific group
+            tmp_group.add('indep_vars',
+                     IndepVarComp(indep_vars),
+                     promotes=['*'])
+            tmp_group.add('mesh',
+                     GeometryMesh(surface),
+                     promotes=['*'])
+            tmp_group.add('def_mesh',
+                     TransferDisplacements(surface),
+                     promotes=['*'])
+            tmp_group.add('vlmgeom',
+                     VLMGeometry(surface),
+                     promotes=['*'])
+            # Add bspline components for active bspline geometric variables
+            for var in surface['active_bsp_vars']:
+                n_pts = surface['num_y']
+                if var == 'thickness_cp':
+                    n_pts -= 1
+                trunc_var = var.split('_')[0]
+                tmp_group.add(trunc_var + '_bsp',
+                         Bspline(var, trunc_var, surface['num_'+var], n_pts),
+                         promotes=['*'])
+            if surface['monotonic_con'] is not None:
+                if type(surface['monotonic_con']) is not list:
+                    surface['monotonic_con'] = [surface['monotonic_con']]
+                for var in surface['monotonic_con']:
+                    tmp_group.add('monotonic_' + var,
+                        MonotonicConstraint(var, surface), promotes=['*'])
+
+            # Add tmp_group to the problem as the name of the surface.
+            # Note that is a group and performance group for each
+            # individual surface.
+            name_orig = name.strip('_')
+            root.add(name_orig, tmp_group, promotes=[])
+            root.add(name_orig+'_perf', VLMFunctionals(surface, self.prob_dict),
+                    promotes=["v", "alpha", "M", "re", "rho"])
+
+        # Add problem information as an independent variables component
+        if self.prob_dict['Re'] == 0:
+            Error('Reynolds number must be greater than zero for viscous drag ' +
+            'calculation. If only inviscid drag is desired, set with_viscous ' +
+            'flag to False.')
+
+        prob_vars = [('v', self.prob_dict['v']),
+            ('alpha', self.prob_dict['alpha']),
+            ('M', self.prob_dict['M']),
+            ('re', self.prob_dict['Re']/self.prob_dict['reynolds_length']),
+            ('rho', self.prob_dict['rho'])]
+        root.add('prob_vars',
+                 IndepVarComp(prob_vars),
+                 promotes=['*'])
+
+        # Add a single 'aero_states' component that solves for the circulations
+        # and forces from all the surfaces.
+        # While other components only depends on a single surface,
+        # this component requires information from all surfaces because
+        # each surface interacts with the others.
+        root.add('aero_states',
+                 VLMStates(self.surfaces),
+                 promotes=['circulations', 'v', 'alpha', 'rho'])
+
+        # Explicitly connect parameters from each surface's group and the common
+        # 'aero_states' group.
+        # This is necessary because the VLMStates component requires information
+        # from each surface, but this information is stored within each
+        # surface's group.
+        for surface in self.surfaces:
+            name = surface['name']
+
+            # Perform the connections with the modified names within the
+            # 'aero_states' group.
+            root.connect(name[:-1] + '.def_mesh', 'aero_states.' + name + 'def_mesh')
+            root.connect(name[:-1] + '.b_pts', 'aero_states.' + name + 'b_pts')
+            root.connect(name[:-1] + '.c_pts', 'aero_states.' + name + 'c_pts')
+            root.connect(name[:-1] + '.normals', 'aero_states.' + name + 'normals')
+
+            # Connect the results from 'aero_states' to the performance groups
+            root.connect('aero_states.' + name + 'sec_forces', name + 'perf' + '.sec_forces')
+
+            # Connect S_ref for performance calcs
+            root.connect(name[:-1] + '.S_ref', name + 'perf' + '.S_ref')
+            root.connect(name[:-1] + '.widths', name + 'perf' + '.widths')
+            root.connect(name[:-1] + '.lengths', name + 'perf' + '.lengths')
+            root.connect(name[:-1] + '.cos_sweep', name + 'perf' + '.cos_sweep')
+
+        # Actually set up the problem
+        self.setup_prob()
+
+    def self.setup_coupledstruct(self):
+        pass
 
 if __name__ == "__main__":
     ''' Test the coupled system with default parameters
