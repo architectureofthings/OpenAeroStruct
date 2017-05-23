@@ -356,9 +356,10 @@ class GeometryMesh(Component):
             self.geo_params[param] = val
             if var in surface['active_geo_vars']:
                 self.add_param(param, val=val)
-
+                # print('param=',param,'   val=',val)
+        print('in init(), self.geo_params: \n',self.geo_params)
         self.add_output('mesh', val=self.mesh)
-
+        # print('self.mesh=',self.mesh)
         self.symmetry = surface['symmetry']
 
         # This flag determines whether or not changes in z (dihedral) add an
@@ -371,9 +372,16 @@ class GeometryMesh(Component):
 
     def solve_nonlinear(self, params, unknowns, resids):
         mesh = self.mesh.copy()
+        print('for key, val in params.iteritems():\n',
+              '  print(key, val)         ')
+        for key, val in params.iteritems():
+            print(key, val)
+        print('before update: self.geo_params: \n',self.geo_params)
+        print("params['twist']=",params['twist'])
         self.geo_params.update(params)
-
+        print('after update:  self.geo_params: \n',self.geo_params)
         if fortran_flag:
+            print('USING FORTRAN!!!')
             # Does not have span stretching coded yet
             mesh = OAS_API.oas_api.manipulate_mesh(mesh, self.geo_params['taper'],
                 self.geo_params['chord'], self.geo_params['sweep'], self.geo_params['xshear'],

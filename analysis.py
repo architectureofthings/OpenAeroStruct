@@ -1,4 +1,3 @@
-
 # Univ. Michigan Aerostructural model.
 # Based on OpenAeroStruct by John Hwang, and John Jasa (github.com/mdolab/OpenAeroStruct)
 # author: Sam Friedman  (samfriedman@tamu.edu)
@@ -38,10 +37,6 @@ Current list of function wrappers available:
     assemble_aic
     aero_circulations
     vlm_forces
-    vlm_coeffs
-    vlm_lift_drag
-    total_lift
-    total_drag
     compute_nodes
     assemble_k
     spatial_beam_fem
@@ -50,12 +45,6 @@ Current list of function wrappers available:
     geometry_mesh
     transfer_displacements
     transfer_loads
-    spatialbeam_energy
-    spatialbeam_weight
-    spatialbeam_failure_ks
-    spatialbeam_failure_exact
-    functional_breguet_range
-    functional_equilibrium
 
 For now, these functions only support a single lifting surface, and does not
 support B-spline customization of the lifting surface.
@@ -78,13 +67,13 @@ import numpy as np
 import math
 
 from materials import MaterialsTube
-from spatialbeam import ComputeNodes, AssembleK, SpatialBeamFEM, SpatialBeamDisp, SpatialBeamEnergy, SpatialBeamWeight, SpatialBeamVonMisesTube, SpatialBeamFailureExact, SpatialBeamFailureKS
+from spatialbeam import ComputeNodes, AssembleK, SpatialBeamFEM, SpatialBeamDisp#, SpatialBeamEnergy, SpatialBeamWeight, SpatialBeamVonMisesTube, SpatialBeamFailureKS
 from transfer import TransferDisplacements, TransferLoads
-from vlm import VLMGeometry, AssembleAIC, AeroCirculations, VLMForces, VLMLiftDrag, VLMCoeffs, TotalLift, TotalDrag, ViscousDrag
+from vlm import VLMGeometry, AssembleAIC, AeroCirculations, VLMForces#, VLMLiftDrag, VLMCoeffs, TotalLift, TotalDrag
 from geometry import GeometryMesh#, Bspline, MonotonicConstraint
 from run_classes import OASProblem
-from openmdao.api import Component
-from functionals import FunctionalBreguetRange, FunctionalEquilibrium
+from openmdao.api import Component, Problem, Group
+# from functionals import FunctionalBreguetRange, FunctionalEquilibrium
 
 # to disable OpenMDAO warnings which will create an error in Matlab
 import warnings
@@ -216,23 +205,11 @@ def setup(prob_dict={}, surfaces=[{}]):
     comp_dict['AssembleAIC'] = AssembleAIC([surface])
     comp_dict['AeroCirculations'] = AeroCirculations(OAS_prob.prob_dict['tot_panels'])
     comp_dict['VLMForces'] = VLMForces([surface])
-    comp_dict['VLMLiftDrag'] = VLMLiftDrag(surface)
-    comp_dict['VLMCoeffs'] = VLMCoeffs(surface)
-    comp_dict['TotalLift'] = TotalLift(surface)
-    comp_dict['TotalDrag'] = TotalDrag(surface)
-    comp_dict['ViscousDrag'] = ViscousDrag(surface, OAS_prob.prob_dict['with_viscous'])
     comp_dict['TransferLoads'] = TransferLoads(surface)
     comp_dict['ComputeNodes'] = ComputeNodes(surface)
     comp_dict['AssembleK'] = AssembleK(surface)
     comp_dict['SpatialBeamFEM'] = SpatialBeamFEM(surface['FEMsize'])
     comp_dict['SpatialBeamDisp'] = SpatialBeamDisp(surface)
-    comp_dict['SpatialBeamEnergy'] = SpatialBeamEnergy(surface)
-    comp_dict['SpatialBeamWeight'] = SpatialBeamWeight(surface)
-    comp_dict['SpatialBeamVonMisesTube'] = SpatialBeamVonMisesTube(surface)
-    comp_dict['SpatialBeamFailureExact'] = SpatialBeamFailureExact(surface)
-    comp_dict['SpatialBeamFailureKS'] = SpatialBeamFailureKS(surface)
-    comp_dict['FunctionalBreguetRange'] = FunctionalBreguetRange([surface], OAS_prob.prob_dict)
-    comp_dict['FunctionalEquilibrium'] = FunctionalEquilibrium([surface], OAS_prob.prob_dict)
     OAS_prob.comp_dict = comp_dict
 
     return OAS_prob
@@ -261,27 +238,12 @@ def aerodynamics(def_mesh, surface, prob_dict, comp_dict):
     size = prob_dict.get('tot_panels')
     rho = prob_dict.get('rho')
 
-    def_mesh = surface['def_mesh']
     b_pts, c_pts, widths, cos_sweep, lengths, normals, S_ref = vlm_geometry(def_mesh, comp_dict['VLMGeometry'])
     AIC, rhs= assemble_aic(surface, def_mesh, b_pts, c_pts, normals, v, alpha, comp_dict['AssembleAIC'])
     circulations = aero_circulations(AIC, rhs, comp_dict['AeroCirculations'])
     sec_forces = vlm_forces(surface, def_mesh, b_pts, circulations, alpha, v, rho, comp_dict['VLMForces'])
     loads = transfer_loads(def_mesh, sec_forces, comp_dict['TransferLoads'])
-    # store variables in surface dict
-    surface.update({
-        'b_pts': b_pts,
-        'c_pts': c_pts,
-        'widths': widths,
-        'cos_sweep': cos_sweep,
-        'lengths': lengths,
-        'normals': normals,
-        'S_ref': S_ref,
-        'loads': loads,
-        'sec_forces': sec_forces
-    })
-    prob_dict.update({
-        'sec_forces': sec_forces
-    })
+
     return loads
 
 
@@ -321,14 +283,7 @@ def structures(loads, surface, prob_dict, comp_dict):
     disp_aug = spatial_beam_fem(K, forces, comp_dict['SpatialBeamFEM'])
     disp = spatial_beam_disp(disp_aug, comp_dict['SpatialBeamDisp'])
     def_mesh = transfer_displacements(mesh, disp, comp_dict['TransferDisplacements'])
-    surface.update({
-        'K': K,
-        'forces': forces,
-        'nodes': nodes,
-        'def_mesh': def_mesh,
-        'disp_aug': disp_aug,
-        'disp': disp
-    })
+
     return def_mesh  # Output the def_mesh matrix
 
 
@@ -354,62 +309,6 @@ def structures2(loads, surface, prob_dict):
 
     return def_mesh  # Output the def_mesh matrix
 
-
-def aero_perf(surface, prob_dict, comp_dict):
-    # unpack surface variables
-    S_ref = surface.get('S_ref')
-    cos_sweep = surface.get('cos_sweep')
-    widths = surface.get('widths')
-    lengths = surface.get('lengths')
-    sec_forces = surface.get('sec_forces')
-    # unpack problem variables
-    M = prob_dict.get('M')
-    re = prob_dict.get('re')
-    rho = prob_dict.get('rho')
-    alpha = prob_dict.get('alpha')
-    v = prob_dict.get('v')
-
-    CDv = viscous_drag(re, M, S_ref, cos_sweep, widths, lengths, comp_dict['ViscousDrag'])
-    L, D = vlm_lift_drag(sec_forces, alpha, comp_dict['VLMLiftDrag'])
-    CL1, CDi = vlm_coeffs(S_ref, L, D, v, rho, comp_dict['VLMCoeffs'])
-    CL = total_lift(CL1, comp_dict['TotalLift'])
-    CD = total_drag(CDi, CDv, comp_dict['TotalDrag'])
-    # store surface variables in dict
-    surface.update({
-        'CDv': CDv,
-        'L': L,
-        'D': D,
-        'CL1': CL1,
-        'CDi': CDi,
-        'CL': CL,
-        'CD': CD
-    })
-    return
-
-
-
-def struct_perf(surface, prob_dict, comp_dict):
-    # unpack surface variables
-    disp = surface.get('disp')
-    loads = surface.get('loads')
-    nodes = surface.get('nodes')
-    r = surface.get('r')
-    A = surface.get('A')
-    energy = spatialbeam_energy(disp, loads, comp_dict['SpatialBeamEnergy'])
-    weight = spatialbeam_weight(A, nodes, comp_dict['SpatialBeamWeight'])
-    vonmises = spatialbeam_vonmises_tube(r, nodes, disp, comp_dict['SpatialBeamVonMisesTube'])
-    if surface['exact_failure_constraint']:
-        failure = spatialbeam_failure_exact(vonmises, comp_dict['SpatialBeamFailureExact'])
-    else:
-        failure = spatialbeam_failure_ks(vonmises, comp_dict['SpatialBeamFailureKS'])
-    # save surface variables
-    surface.update({
-        'energy': energy,
-        'weight': weight,
-        'vonmises': vonmises,
-        'failure': failure
-    })
-    return
 
 # def cp2pt(cp, jac):
 #     """
@@ -479,9 +378,11 @@ def geometry_mesh(surface, comp=None):
         geo_params[param] = val
         if var in surface['active_geo_vars']:
             params.update({param: val})
+    # print('params before GeometryMesh.solve_nonlinear(): ', params)
     unknowns = {
         'mesh': comp.mesh
     }
+    # print('unknowns after GeometryMesh.solve_nonlinear(): ', unknowns)
     resids = None
     comp.solve_nonlinear(params, unknowns, resids)
     mesh = unknowns.get('mesh')
@@ -827,198 +728,6 @@ def transfer_loads(def_mesh, sec_forces, comp):
     return loads
 
 
-def vlm_lift_drag(sec_forces, alpha, comp):
-    """
-    Calculate total lift and drag in force units based on section forces.
-
-    Parameters
-    ----------
-    sec_forces[nx-1, ny-1, 3] : numpy array
-        Flattened array containing the sectional forces acting on each panel.
-        Stored in Fortran order (only relevant with more than one chordwise
-        panel).
-    alpha : float
-        Angle of attack in degrees.
-
-    Returns
-    -------
-    L : float
-        Total induced lift force for the lifting surface.
-    D : float
-        Total induced drag force for the lifting surface.
-
-    """
-    if not isinstance(comp, Component):
-        surface = comp
-        comp=VLMLiftDrag(surface)
-    params={
-        'sec_forces': sec_forces,
-        'alpha': alpha
-    }
-    unknowns={
-        'L': 0.,
-        'D': 0.
-    }
-    resids=None
-    comp.solve_nonlinear(params, unknowns, resids)
-    L=unknowns.get('L')
-    D=unknowns.get('D')
-    return L, D
-
-
-def vlm_coeffs(S_ref, L, D, v, rho, comp):
-    """ Compute lift and drag coefficients.
-
-    Parameters
-    ----------
-    S_ref : float
-        The reference areas of the lifting surface.
-    L : float
-        Total lift for the lifting surface.
-    D : float
-        Total drag for the lifting surface.
-    v : float
-        Freestream air velocity in m/s.
-    rho : float
-        Air density in kg/m^3.
-
-    Returns
-    -------
-    CL1 : float
-        Induced coefficient of lift (CL) for the lifting surface.
-    CDi : float
-        Induced coefficient of drag (CD) for the lifting surface.
-    """
-    if not isinstance(comp, Component):
-        surface = comp
-        comp = VLMCoeffs(surface)
-    params = {
-        'S_ref': S_ref,
-        'L': L,
-        'D': D,
-        'v': v,
-        'rho': rho
-    }
-    unknowns = {
-        'CL1': 0.,
-        'CDi': 0.
-    }
-    resids = None
-    comp.solve_nonlinear(params, unknowns, resids)
-    CL1 = unknowns.get('CL1', 0.)
-    CDi = unknowns.get('CDi', 0.)
-    return CL1, CDi
-
-
-def total_lift(CL1, comp):
-    """ Calculate total lift in force units.
-
-    Parameters
-    ----------
-    CL1 : float
-        Induced coefficient of lift (CL) for the lifting surface.
-
-    Returns
-    -------
-    CL : float
-        Total coefficient of lift (CL) for the lifting surface.
-
-    """
-    if not isinstance(comp, Component):
-        surface = comp
-        comp = TotalLift(surface)
-    params = {
-        'CL1': CL1
-    }
-    unknowns = {
-        'CL': 0.
-    }
-    resids = None
-    comp.solve_nonlinear(params, unknowns, resids)
-    CL = unknowns.get('CL', 0.)
-    return CL
-
-
-def total_drag(CDi, CDv, comp):
-    """ Calculate total drag in force units.
-
-    Parameters
-    ----------
-    CDi : float
-        Induced coefficient of drag (CD) for the lifting surface.
-    CDv : float
-        Calculated viscous drag for the lifting surface..
-
-    Returns
-    -------
-    CD : float
-        Total coefficient of drag (CD) for the lifting surface.
-
-    """
-    if not isinstance(comp, Component):
-        surface = comp
-        comp = TotalDrag(surface)
-    params = {
-        'CDi': CDi,
-        'CDv': CDv
-    }
-    unknowns = {
-        'CD': 0.
-    }
-    resids = None
-    comp.solve_nonlinear(params, unknowns, resids)
-    CD = unknowns.get('CD', 0.)
-    return CD
-
-
-def viscous_drag(Re, M, S_ref, cos_sweep, widths, lengths, comp, withViscous=True):
-    """
-    Compute the skin friction drag if the with_viscous option is True.
-
-    Parameters
-    ----------
-    re : float
-        Dimensionalized (1/length) Reynolds number. This is used to compute the
-        local Reynolds number based on the local chord length.
-    M : float
-        Mach number.
-    S_ref : float
-        The reference area of the lifting surface.
-    sweep : float
-        The angle (in degrees) of the wing sweep. This is used in the form
-        factor calculation.
-    widths[ny-1] : numpy array
-        The spanwise width of each panel.
-    lengths[ny] : numpy array
-        The sum of the lengths of each line segment along a chord section.
-
-    Returns
-    -------
-    CDv : float
-        Viscous drag coefficient for the lifting surface computed using flat
-        plate skin friction coefficient and a form factor to account for wing
-        shape.
-    """
-    if not isinstance(comp, Component):
-        surface = comp
-        comp=ViscousDrag(surface, withViscous)
-    params = {
-        're': Re,
-        'M': M,
-        'S_ref': S_ref,
-        'cos_sweep': cos_sweep,
-        'widths': widths,
-        'lengths': lengths
-    }
-    unknowns = {
-        'CDv': 0.
-    }
-    resids = None
-    comp.solve_nonlinear(params, unknowns, resids)
-    CDv = unknowns.get('CDv',0.0)
-    return CDv
-
-
 """
 ================================================================================
                                    STRUCTURES
@@ -1195,178 +904,6 @@ def assemble_k(A, Iy, Iz, J, nodes, loads, comp):
     return K, forces
 
 
-def spatialbeam_energy(disp, loads, comp):
-    """ Compute strain energy.
-
-    Parameters
-    ----------
-    disp[ny, 6] : numpy array
-        Actual displacement array formed by truncating disp_aug.
-    loads[ny, 6] : numpy array
-        Array containing the loads applied on the FEM component,
-        computed from the sectional forces.
-
-    Returns
-    -------
-    energy : float
-        Total strain energy of the structural component.
-
-    """
-    if not isinstance(comp, Component):
-        surface = comp
-        comp = SpatialBeamEnergy(surface)
-    params = {
-        'disp': disp,
-        'loads': loads
-    }
-    unknowns = {
-        'energy': 0.
-    }
-    resids = None
-    comp.solve_nonlinear(params, unknowns, resids)
-    energy = unknowns.get('energy', 0.)
-    return energy
-
-
-def spatialbeam_weight(A, nodes, comp):
-    """ Compute total weight.
-
-    Parameters
-    ----------
-    A[ny-1] : numpy array
-        Areas for each FEM element.
-    nodes[ny, 3] : numpy array
-        Flattened array with coordinates for each FEM node.
-
-    Returns
-    -------
-    weight : float
-        Total weight of the structural component.
-    """
-    if not isinstance(comp, Component):
-        surface = comp
-        comp = SpatialBeamWeight(surface)
-    params = {
-        'A': A,
-        'nodes': nodes
-    }
-    unknowns = {
-        'weight': 0.
-    }
-    resids = None
-    comp.solve_nonlinear(params, unknowns, resids)
-    weight = unknowns.get('weight', 0.)
-    return weight
-
-def spatialbeam_vonmises_tube(r, nodes, disp, comp):
-    """ Compute the von Mises stress in each element.
-
-    Parameters
-    ----------
-    r[ny-1] : numpy array
-        Radii for each FEM element.
-    nodes[ny, 3] : numpy array
-        Flattened array with coordinates for each FEM node.
-    disp[ny, 6] : numpy array
-        Displacements of each FEM node.
-
-    Returns
-    -------
-    vonmises[ny-1, 2] : numpy array
-        von Mises stress magnitudes for each FEM element.
-
-    """
-    if not isinstance(comp, Component):
-        surface = comp
-        comp = SpatialBeamVonMisesTube(surface)
-    params = {
-        'nodes': nodes,
-        'r': r,
-        'disp': disp
-    }
-    unknowns = {
-        'vonmises': np.zeros((comp.ny-1, 2), dtype=data_type)
-    }
-    resids = None
-    comp.solve_nonlinear(params, unknowns, resids)
-    vonmises = unknowns.get('vonmises')
-    return vonmises
-
-
-def spatialbeam_failure_ks(vonmises, comp):
-    """
-    Aggregate failure constraints from the structure.
-
-    To simplify the optimization problem, we aggregate the individual
-    elemental failure constraints using a Kreisselmeier-Steinhauser (KS)
-    function.
-
-    The KS function produces a smoother constraint than using a max() function
-    to find the maximum point of failure, which produces a better-posed
-    optimization problem.
-
-    The rho parameter controls how conservatively the KS function aggregates
-    the failure constraints. A lower value is more conservative while a greater
-    value is more aggressive (closer approximation to the max() function).
-
-    Parameters
-    ----------
-    vonmises[ny-1, 2] : numpy array
-        von Mises stress magnitudes for each FEM element.
-
-    Returns
-    -------
-    failure : float
-        KS aggregation quantity obtained by combining the failure criteria
-        for each FEM node. Used to simplify the optimization problem by
-        reducing the number of constraints.
-
-    """
-    if not isinstance(comp, Component):
-        surface = comp
-        comp = SpatialBeamFailureKS(surface)
-    params = {
-        'vonmises': vonmises
-    }
-    unknowns = {
-        'failure': 0.
-    }
-    resids = None
-    comp.solve_nonlinear(params, unknowns, resids)
-    failure = unknowns.get('failure')
-    return failure
-
-
-def spatialbeam_failure_exact(vonmises, comp):
-    """
-    Outputs individual failure constraints on each FEM element.
-
-    Parameters
-    ----------
-    vonmises[ny-1, 2] : numpy array
-        von Mises stress magnitudes for each FEM element.
-
-    Returns
-    -------
-    failure[ny-1, 2] : numpy array
-        Array of failure conditions. Positive if element has failed.
-
-    """
-    if not isinstace(comp, Component):
-        surface = comp
-        comp = SpatialBeamFailureExact(surface)
-    params = {
-        'vonmises': vonmises
-    }
-    unknowns = {
-        'failure': np.zeros((comp.ny-1, 2), dtype=data_type)
-    }
-    resids = None
-    comp.solve_nonlinear(params, unknowns, resids)
-    failure = unknowns.get('failure')
-    return failure
-
-
 """
 ================================================================================
                                 MATERIALS
@@ -1427,52 +964,178 @@ def materials_tube(r, thickness, comp):
                                 FUNCTIONALS
 ================================================================================
     From functionals.py:
+
+        to be added here...
+
+        """
+
+def setup_aero(prob_dict={}, surfaces=[{}]):
+    """
+    Specific method to add the necessary components to the problem for an
+    aerodynamic problem.
     """
 
-def functional_breguet_range(surfaces, CL, CD, weight, prob_dict, comp):
-    """ Computes the fuel burn using the Breguet range equation """
-    if not isinstance(comp, Component):
-        surfaces = comp
-        comp = FunctionalBreguetRange(surfaces, prob_dict)
-    params = {}
-    for surface in surfaces:
-        name = surface['name']
-        params.update({
-            name+'CL': CL,
-            name+'CD': CD,
-            name+'weight': weight
-        })
-    unknowns = {
-        'fuelburn': 0.
-    }
-    resids = None
-    comp.solve_nonlinear(params, unknowns, resids)
-    fuelburn = unknowns.get('fuelburn', 0.)
-    return fuelburn
+    # Set problem type
+    prob_dict.update({'type' : 'aerostruct'})  # this doesn't really matter since we aren't calling OASProblem.setup()
 
+    # Instantiate problem
+    OAS_prob = OASProblem(prob_dict)
 
-def functional_equilibrium(surfaces, L, weight, fuelburn, prob_dict, comp):
-    """ L = W constraint """
-    if not isinstance(comp, Component):
-        surfaces = comp
-        comp = FunctionalEquilibrium(surfaces, prob_dict)
-    params = {}
     for surface in surfaces:
-        name = surface['name']
-        params.update({
-            name+'L': L,
-            name+'weight': weight
+        # Add SpatialBeamFEM size
+        FEMsize = 6 * surface['num_y'] + 6
+        surface.update({'FEMsize': FEMsize})
+        # Add the specified wing surface to the problem.
+        OAS_prob.add_surface(surface)
+
+    # Add materials properties for the wing surface to the surface dict in OAS_prob
+    for idx, surface in enumerate(OAS_prob.surfaces):
+        A, Iy, Iz, J = materials_tube(surface['r'], surface['t'], surface)
+        OAS_prob.surfaces[idx].update({
+            'A': A,
+            'Iy': Iy,
+            'Iz': Iz,
+            'J': J
         })
-    params.update({
-        'fuelburn': fuelburn
-    })
-    unknowns = {
-        'eq_con': 0.
-    }
-    resids = None
-    comp.solve_nonlinear(params, unknowns, resids)
-    eq_con = unknowns.get('eq_con', 0.)
-    return eq_con
+
+    # Get total panels and save in prob_dict
+    tot_panels = 0
+    for surface in OAS_prob.surfaces:
+        ny = surface['num_y']
+        nx = surface['num_x']
+        tot_panels += (nx - 1) * (ny - 1)
+    OAS_prob.prob_dict.update({'tot_panels': tot_panels})
+
+    # Assume we are only using a single lifting surface for now
+    surface = OAS_prob.surfaces[0]
+
+    # Initialize the OpenAeroStruct components and save them in a component dictionary
+    comp_dict = {}
+    comp_dict['MaterialsTube'] = MaterialsTube(surface)
+    comp_dict['GeometryMesh'] = GeometryMesh(surface)
+    comp_dict['TransferDisplacements'] = TransferDisplacements(surface)
+    comp_dict['VLMGeometry'] = VLMGeometry(surface)
+    comp_dict['AssembleAIC'] = AssembleAIC([surface])
+    comp_dict['AeroCirculations'] = AeroCirculations(OAS_prob.prob_dict['tot_panels'])
+    comp_dict['VLMForces'] = VLMForces([surface])
+    comp_dict['TransferLoads'] = TransferLoads(surface)
+    comp_dict['ComputeNodes'] = ComputeNodes(surface)
+    comp_dict['AssembleK'] = AssembleK(surface)
+    comp_dict['SpatialBeamFEM'] = SpatialBeamFEM(surface['FEMsize'])
+    comp_dict['SpatialBeamDisp'] = SpatialBeamDisp(surface)
+    OAS_prob.comp_dict = comp_dict
+
+    # Set the problem name if the user doesn't
+    if 'prob_name' not in self.prob_dict.keys():
+        self.prob_dict['prob_name'] = 'aero'
+
+    # Create the base root-level group
+    root = Group()
+
+    # Create the problem and assign the root group
+    self.prob = Problem()
+    self.prob.root = root
+
+    # Loop over each surface in the surfaces list
+    for surface in self.surfaces:
+
+        # Get the surface name and create a group to contain components
+        # only for this surface
+        name = surface['name']
+        tmp_group = Group()
+
+        # Add independent variables that do not belong to a specific component
+        indep_vars = [('disp', np.zeros((surface['num_y'], 6), dtype=data_type))]
+        for var in surface['active_geo_vars']:
+            indep_vars.append((var, surface[var]))
+
+        # Add aero components to the surface-specific group
+        tmp_group.add('indep_vars',
+                 IndepVarComp(indep_vars),
+                 promotes=['*'])
+        tmp_group.add('mesh',
+                 GeometryMesh(surface),
+                 promotes=['*'])
+        tmp_group.add('def_mesh',
+                 TransferDisplacements(surface),
+                 promotes=['*'])
+        tmp_group.add('vlmgeom',
+                 VLMGeometry(surface),
+                 promotes=['*'])
+        # Add bspline components for active bspline geometric variables
+        for var in surface['active_bsp_vars']:
+            n_pts = surface['num_y']
+            if var == 'thickness_cp':
+                n_pts -= 1
+            trunc_var = var.split('_')[0]
+            tmp_group.add(trunc_var + '_bsp',
+                     Bspline(var, trunc_var, surface['num_'+var], n_pts),
+                     promotes=['*'])
+        if surface['monotonic_con'] is not None:
+            if type(surface['monotonic_con']) is not list:
+                surface['monotonic_con'] = [surface['monotonic_con']]
+            for var in surface['monotonic_con']:
+                tmp_group.add('monotonic_' + var,
+                    MonotonicConstraint(var, surface), promotes=['*'])
+
+        # Add tmp_group to the problem as the name of the surface.
+        # Note that is a group and performance group for each
+        # individual surface.
+        name_orig = name.strip('_')
+        root.add(name_orig, tmp_group, promotes=[])
+        root.add(name_orig+'_perf', VLMFunctionals(surface, self.prob_dict),
+                promotes=["v", "alpha", "M", "re", "rho"])
+
+    # Add problem information as an independent variables component
+    if self.prob_dict['Re'] == 0:
+        Error('Reynolds number must be greater than zero for viscous drag ' +
+        'calculation. If only inviscid drag is desired, set with_viscous ' +
+        'flag to False.')
+
+    prob_vars = [('v', self.prob_dict['v']),
+        ('alpha', self.prob_dict['alpha']),
+        ('M', self.prob_dict['M']),
+        ('re', self.prob_dict['Re']/self.prob_dict['reynolds_length']),
+        ('rho', self.prob_dict['rho'])]
+    root.add('prob_vars',
+             IndepVarComp(prob_vars),
+             promotes=['*'])
+
+    # Add a single 'aero_states' component that solves for the circulations
+    # and forces from all the surfaces.
+    # While other components only depends on a single surface,
+    # this component requires information from all surfaces because
+    # each surface interacts with the others.
+    root.add('aero_states',
+             VLMStates(self.surfaces),
+             promotes=['circulations', 'v', 'alpha', 'rho'])
+
+    # Explicitly connect parameters from each surface's group and the common
+    # 'aero_states' group.
+    # This is necessary because the VLMStates component requires information
+    # from each surface, but this information is stored within each
+    # surface's group.
+    for surface in self.surfaces:
+        name = surface['name']
+
+        # Perform the connections with the modified names within the
+        # 'aero_states' group.
+        root.connect(name[:-1] + '.def_mesh', 'aero_states.' + name + 'def_mesh')
+        root.connect(name[:-1] + '.b_pts', 'aero_states.' + name + 'b_pts')
+        root.connect(name[:-1] + '.c_pts', 'aero_states.' + name + 'c_pts')
+        root.connect(name[:-1] + '.normals', 'aero_states.' + name + 'normals')
+
+        # Connect the results from 'aero_states' to the performance groups
+        root.connect('aero_states.' + name + 'sec_forces', name + 'perf' + '.sec_forces')
+
+        # Connect S_ref for performance calcs
+        root.connect(name[:-1] + '.S_ref', name + 'perf' + '.S_ref')
+        root.connect(name[:-1] + '.widths', name + 'perf' + '.widths')
+        root.connect(name[:-1] + '.lengths', name + 'perf' + '.lengths')
+        root.connect(name[:-1] + '.cos_sweep', name + 'perf' + '.cos_sweep')
+
+    # Actually set up the problem
+    self.setup_prob()
 
 
 
@@ -1486,13 +1149,11 @@ if __name__ == "__main__":
      }
     '''
     print('Fortran Flag = {0}'.format(fortran_flag))
-
     # Define parameters
-    prob_dict = {'type':'aerostruct'} # use default
+    prob_dict = {} # use default
 
     # Define surface
     surface = {
-        'name': 'wing',
         'wing_type' : 'CRM',
         'num_x': 2,   # number of chordwise points
         'num_y': 9    # number of spanwise points
@@ -1506,40 +1167,36 @@ if __name__ == "__main__":
         # 'print': int(0),        # Print option (unused)
         'maxiter': int(100),    # Maximum number of iterations
         # 'rtol': float(1e-06),   # Relative convergence tolerance (unused)
-        'utol': float(1e-16)    # Convergence tolerance on the change in the unknowns
+        'utol': float(1e-12)    # Convergence tolerance on the change in the unknowns
     }
 
     print('Run analysis.setup()')
-
-    OASprob = setup(prob_dict, [surface])
-
-    # Using standard method in run_classes.py
-    stdOASprob = OASProblem(prob_dict)
-    stdOASprob.add_surface(surface)
-    stdOASprob.setup()
-    stdOASprob.run()
+    OAS_prob = setup(prob_dict=prob_dict, surfaces=[surface])
+    # print('OAS_prob.surfaces = ')
+    # print(OAS_prob.surfaces)
+    # print('OAS_prob.prob_dict = ')
+    # print(OAS_prob.prob_dict)
+    # print('OAS_prob.comp_dict = ')
+    # print(OAS_prob.comp_dict)
 
     print('Run coupled system analysis with fixed point iteration')
+
     # Make local functions for coupled system analysis
-    def f_aero(def_mesh, surface):
-        loads = aerodynamics(def_mesh, surface, OASprob.prob_dict, OASprob.comp_dict)
-        # loads = aerodynamics2(def_mesh, OASprob.surfaces[0], OASprob.OASprob.prob_dict)
+    def f_aero(def_mesh):
+        # loads = aerodynamics(def_mesh, OAS_prob.surfaces[0], OAS_prob.prob_dict, OAS_prob.comp_dict)
+        loads = aerodynamics2(def_mesh, OAS_prob.surfaces[0], OAS_prob.prob_dict)
         return loads
-    def f_struct(loads, surface):
-        def_mesh = structures(loads, surface, OASprob.prob_dict, OASprob.comp_dict)
-        # def_mesh = structures2(loads, OASprob.surfaces[0], OASprob.OASprob.prob_dict)
+    def f_struct(loads):
+        # def_mesh = structures(loads, OAS_prob.surfaces[0], OAS_prob.prob_dict, OAS_prob.comp_dict)
+        def_mesh = structures2(loads, OAS_prob.surfaces[0], OAS_prob.prob_dict)
         return def_mesh
 
     # Define FPI parameters
     utol = fpi_opt['utol']
     maxiter = fpi_opt['maxiter']
     # Generate initial mesh with zero deformation
-    def_mesh = gen_init_mesh(OASprob.surfaces[0], OASprob.comp_dict)
-    OASprob.surfaces[0]['def_mesh'] = def_mesh
-    surface = OASprob.surfaces[0]
-    x0 = f_aero(def_mesh, surface)*0.0
-    # x0 = np.zeros((f_aero(def_mesh,surface).size))
-    print(x0)
+    def_mesh = gen_init_mesh(OAS_prob.surfaces[0], OAS_prob.comp_dict)
+    x0 = def_mesh
     u_norm = 1.0e99
     iter_count = 0
     # Run fixed point iteration on coupled aerodynamics-structures system
@@ -1547,8 +1204,8 @@ if __name__ == "__main__":
           # Update iteration counter
           iter_count += 1
           # Run iteration and evaluate norm of residual
-          loads = x = aerodynamics(x0, surface, OASprob.prob_dict, OASprob.comp_dict)
-          def_mesh = structures(loads, surface, OASprob.prob_dict, OASprob.comp_dict)
+          loads = f_aero(x0)
+          def_mesh = x = f_struct(loads)
           u_norm = np.linalg.norm(x - x0)
           x0 = x
 
@@ -1558,35 +1215,5 @@ if __name__ == "__main__":
         msg = 'Converged in {0:d} iterations'.format(iter_count)
 
     print(msg)
-
-    print('  -----  TEST ACCURACY  -----   ')
-    print('variable  |   analysis.py   |   run_classes.py')
-    print('----------------------------------------------')
-    var = 'b_pts'
-    print('{0:9s}|{a[b_pts]}|{b[coupled.wing.b_pts]}'.format(var,a=surface,b=stdOASprob.prob))
-    # b_pts, c_pts, widths, cos_sweep, lengths, normals, S_ref = vlm_geometry(def_mesh, comp_dict['VLMGeometry'])
-    # AIC, rhs= assemble_aic(surface, def_mesh, b_pts, c_pts, normals, v, alpha, comp_dict['AssembleAIC'])
-    # circulations = aero_circulations(AIC, rhs, comp_dict['AeroCirculations'])
-    # sec_forces = vlm_forces(surface, def_mesh, b_pts, circulations, alpha, v, rho, comp_dict['VLMForces'])
-    # loads = transfer_loads(def_mesh, sec_forces, comp_dict['TransferLoads'])
-
-
-    print('def_mesh=\n',def_mesh.real)
-    print('stdOASprob def_mesh=\n',stdOASprob.prob['coupled.wing.def_mesh'])
-    print('def_mesh error=\n',def_mesh.real-stdOASprob.prob['coupled.wing.def_mesh'])
-    print('np.linalg.norm(def_mesh error)=',np.linalg.norm(def_mesh.real-stdOASprob.prob['coupled.wing.def_mesh']))
-
-
-    print('loads=\n',loads.real)
-    print('stdOASprob loads=\n',stdOASprob.prob['coupled.wing.loads'])
-    print('loads error=\n',loads.real-stdOASprob.prob['coupled.wing.loads'])
-    print('np.linalg.norm(loads error)=',np.linalg.norm(loads.real-stdOASprob.prob['coupled.wing.loads']))
-
-    print('Evaluate functional components...')
-    aero_perf(surface, OASprob.prob_dict, OASprob.comp_dict)
-    struct_perf(surface, OASprob.prob_dict, OASprob.comp_dict)
-    # print(surface['CL'], surface['CD'], surface['weight'])
-    fuelburn = functional_breguet_range([surface], surface['CL'], surface['CD'], surface['weight'], OASprob.prob_dict, OASprob.comp_dict['FunctionalBreguetRange'])
-    eq_con = functional_equilibrium([surface], surface['L'], surface['weight'], fuelburn, OASprob.prob_dict, OASprob.comp_dict['FunctionalEquilibrium'])
-    print('fuelburn=',fuelburn.real)
-    print('stdOASprob.prob[fuelburn]=',stdOASprob.prob['fuelburn'])
+    print('def_mesh=\n',def_mesh)
+    print('loads=\n',loads)
