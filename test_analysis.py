@@ -3,8 +3,9 @@ import analysis
 from run_classes import OASProblem
 import numpy as np
 import sys
+import pprint
 
-
+pp = pprint.PrettyPrinter(width=1)
 
 def test_aero(surface):
     print('Test aerodynamics')
@@ -15,6 +16,7 @@ def test_aero(surface):
     print('--- Use run_classes.py ---')
     rcOAS = OASProblem(prob_dict)
     rcOAS.add_surface(surface)
+    # print('rcSurface',rcOAS.surfaces[0])
     rcMesh = rcOAS.surfaces[0]['mesh']
     rcOAS.setup()
     # print('rcOAS.prob.root._subsystems:',rcOAS.prob.root._subsystems)
@@ -23,18 +25,36 @@ def test_aero(surface):
     # Using analysis.py objects and functions
     print('--- Use analysis.py ---')
     anOAS = analysis.setup(prob_dict, [surface])
+    print('anOAS.comp_dict = ')
+    pp.pprint(anOAS.comp_dict)
+    # print('anSurface',anOAS.surfaces[0])
     anMesh = anOAS.surfaces[0]['mesh']
     # Generate initial mesh
-    mesh = analysis.geometry_mesh(anOAS.surfaces[0], anOAS.comp_dict['GeometryMesh'])
-    disp = np.zeros((anOAS.surfaces[0]['num_y'], 6), dtype=analysis.data_type)  # zero displacement
-    def_mesh = analysis.transfer_displacements(mesh, disp, anOAS.comp_dict['TransferDisplacements'])
-    print('...after setup functions but before GeometryMesh()...')
-    print('anMESH=',anMesh)
-    print('rcMESH=',rcMesh)
-    print('errorMESH=',anMesh-rcMesh)
-    print('...after GeometryMesh()...')
-    print('anMESH=',mesh)
-    print('rcMESH=',rcOAS.prob['wing.mesh'])
+    print('...after setup functions but before gen_init_mesh()...')
+    # print('anOAS.surfaces[0] = ')
+    # pp.pprint(anOAS.surfaces[0])
+
+    mesh = analysis.gen_init_mesh(anOAS.surfaces[0], anOAS.comp_dict)
+    # mesh = analysis.geometry_mesh(anOAS.surfaces[0], anOAS.comp_dict['GeometryMesh'])
+    # disp = np.zeros((anOAS.surfaces[0]['num_y'], 6), dtype=analysis.data_type)  # zero displacement
+    # def_mesh = analysis.transfer_displacements(mesh, disp, anOAS.comp_dict['TransferDisplacements'])
+    # print('anMESH=',anMesh)
+    # print('rcMESH=',rcMesh)
+    # print('errorMESH=',anMesh-rcMesh)
+    # print('rcOAS.prob["wing.twist"] = ',rcOAS.prob["wing.twist"])
+    # print('anOAS.surfaces[0]["twist"] = ',anOAS.surfaces[0]["twist"])
+    # print('rcOAS.surfaces[0]["twist_cp"] = ',rcOAS.surfaces[0]["twist_cp"])
+    # print('anOAS.surfaces[0]["twist_cp"] = ',anOAS.surfaces[0]["twist_cp"])
+    # print('...after gen_init_mesh()...')
+    # # print('rcOAS.surfaces[0] = ')
+    # # pp.pprint(rcOAS.surfaces[0])
+    # print('rcOAS.prob["wing.twist"] = ',rcOAS.prob["wing.twist"])
+    # print('rcOAS.prob["wing.twist_cp"] = ',rcOAS.prob["wing.twist_cp"])
+    # print('anOAS.surfaces[0]["twist"] = ',anOAS.surfaces[0]["twist"])
+    # print('rcOAS.surfaces[0]["twist_cp"] = ',rcOAS.surfaces[0]["twist_cp"])
+    # print('anOAS.surfaces[0]["twist_cp"] = ',anOAS.surfaces[0]["twist_cp"])
+    # # print('anMESH=',mesh)
+    # # print('rcMESH=',rcOAS.prob['wing.mesh'])
     print('errorMESH=',mesh-rcOAS.prob['wing.mesh'])
     # print('**def_mesh=',def_mesh)
     # print('**rcOAS.prob[wing.def_mesh]=',rcOAS.prob['wing.def_mesh'])

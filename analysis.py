@@ -70,10 +70,13 @@ from materials import MaterialsTube
 from spatialbeam import ComputeNodes, AssembleK, SpatialBeamFEM, SpatialBeamDisp#, SpatialBeamEnergy, SpatialBeamWeight, SpatialBeamVonMisesTube, SpatialBeamFailureKS
 from transfer import TransferDisplacements, TransferLoads
 from vlm import VLMGeometry, AssembleAIC, AeroCirculations, VLMForces#, VLMLiftDrag, VLMCoeffs, TotalLift, TotalDrag
-from geometry import GeometryMesh#, Bspline, MonotonicConstraint
+from geometry import GeometryMesh, Bspline#, MonotonicConstraint
 from run_classes import OASProblem
 from openmdao.api import Component, Problem, Group
 # from functionals import FunctionalBreguetRange, FunctionalEquilibrium
+
+from pprint import PrettyPrinter
+pp = PrettyPrinter(width=1, indent=2)
 
 # to disable OpenMDAO warnings which will create an error in Matlab
 import warnings
@@ -200,6 +203,18 @@ def setup(prob_dict={}, surfaces=[{}]):
     comp_dict = {}
     comp_dict['MaterialsTube'] = MaterialsTube(surface)
     comp_dict['GeometryMesh'] = GeometryMesh(surface)
+
+    # Add bspline components for active bspline geometric variables
+    comp_dict['Bspline'] = {}  # empty dict to contain all Bspline component sub dict
+    for var in surface['active_bsp_vars']:
+        n_pts = surface['num_y']
+        if var == 'thickness_cp':
+            n_pts -= 1
+        trunc_var = var.split('_')[0]
+        comp_dict['Bspline'].update({   # add dict containing initialized Bspline component for variable
+            trunc_var: Bspline(var, trunc_var, surface['num_'+var], n_pts)
+        })
+
     comp_dict['TransferDisplacements'] = TransferDisplacements(surface)
     comp_dict['VLMGeometry'] = VLMGeometry(surface)
     comp_dict['AssembleAIC'] = AssembleAIC([surface])
@@ -214,11 +229,38 @@ def setup(prob_dict={}, surfaces=[{}]):
 
     return OAS_prob
 
-
+def b_spline(cpname, cpval, n_output, comp):
+    ''' Add bspline components for active bspline geometric variables
+        Note: keep n_input in as input argument for forward compatibility'''
+    params = {
+        cpname: cpval
+    }
+    unknowns = {
+        cpname.split('_')[0]: np.zeros(n_output)
+    }
+    resids = {}
+    print('in b_spline before solve_nonlinear, params =')
+    pp.pprint(params)
+    print('comp.jac = ')
+    print(comp.jac.todense())
+    comp.solve_nonlinear(params, unknowns, resids)
+    print('in b_spline after solve_nonlinear, unknowns =')
+    pp.pprint(unknowns)
+    return unknowns.get(comp.ptname)
 
 def gen_init_mesh(surface, comp_dict=None):
     ''' Generate initial def_mesh '''
     if comp_dict:
+        for trunc_var, bsp_comp in comp_dict['Bspline'].items():
+            # trunc_var = truncated variable name, e.g. "thickness"
+            # bsp_comp = Bspline() component for variable
+            var = trunc_var + '_cp'
+            n_pts = surface['num_y']
+            if var == 'thickness_cp':
+                n_pts -= 1
+            surface[trunc_var] = b_spline(var, surface[var], n_pts, bsp_comp)
+        print('*****  surface dict after b_spline() before geometry_mesh()  *****')
+        pp.pprint(surface)
         mesh = geometry_mesh(surface, comp_dict['GeometryMesh'])
         disp = np.zeros((surface['num_y'], 6), dtype=data_type)  # zero displacement
         def_mesh = transfer_displacements(mesh, disp, comp=comp_dict['TransferDisplacements'])
@@ -357,28 +399,18 @@ def geometry_mesh(surface, comp=None):
     zeros_list = ['sweep', 'dihedral', 'twist_cp', 'xshear_cp', 'zshear_cp']     # Variables that should be initialized to zero
     set_list = ['span']     # Variables that should be initialized to given value
     all_geo_vars = ones_list + zeros_list + set_list
-    geo_params = {}
+    # geo_params = {}
     for var in all_geo_vars:
+        print(u'%%%%%%  var =',var)
         if len(var.split('_')) > 1:
             param = var.split('_')[0]
-            if var in ones_list:
-                val = np.ones(ny)
-            elif var in zeros_list:
-                val = np.zeros(ny)
-            else:
-                val = surface[var]
         else:
             param = var
-            if var in ones_list:
-                val = 1.0
-            elif var in zeros_list:
-                val = 0.0
-            else:
-                val = surface[var]
-        geo_params[param] = val
+        print(u'%%%%%% param =',param)
         if var in surface['active_geo_vars']:
-            params.update({param: val})
-    # print('params before GeometryMesh.solve_nonlinear(): ', params)
+            params.update({param: surface[param]})
+    print('^^^^^^^^  params before GeometryMesh.solve_nonlinear(): ')
+    pp.pprint(params)
     unknowns = {
         'mesh': comp.mesh
     }
