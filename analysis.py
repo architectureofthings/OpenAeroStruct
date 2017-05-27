@@ -62,12 +62,6 @@ support B-spline customization of the lifting surface.
 
 Future work required:
     - Extend functions to be used with multiple lifting surfaces
-    - Write wrappers for remaining components in functionals.py, VLMFunctionals,
-        SpatialBeamFunctionals
-    - Fix BSpline surface customization
-    - Complete example of full multidisciplinary analysis in
-        if __name__=="__main__" function
-
 """
 
 # make compatible Python 2.x to 3.x
@@ -222,6 +216,7 @@ def setup(prob_dict={}, surfaces=[{}]):
     comp_dict = {}
     comp_dict['MaterialsTube'] = MaterialsTube(surface)
     comp_dict['GeometryMesh'] = GeometryMesh(surface)
+    comp_dict['TransferDisplacements'] = TransferDisplacements(surface)
 
     # Add bspline components for active bspline geometric variables
     comp_dict['Bspline'] = {}  # empty dict to contain all Bspline component sub dict
@@ -233,8 +228,19 @@ def setup(prob_dict={}, surfaces=[{}]):
         comp_dict['Bspline'].update({   # add dict containing initialized Bspline component for variable
             trunc_var: Bspline(var, trunc_var, surface['num_'+var], n_pts)
         })
-
-    comp_dict['TransferDisplacements'] = TransferDisplacements(surface)
+    # incorporate bspline elements into surface mesh
+    for trunc_var, bsp_comp in comp_dict['Bspline'].items():
+        # trunc_var = truncated variable name, e.g. "thickness"
+        # bsp_comp = Bspline() component for variable
+        var = trunc_var + '_cp'
+        n_pts = surface['num_y']
+        if var == 'thickness_cp':
+            n_pts -= 1
+        surface[trunc_var] = b_spline(var, surface[var], n_pts, bsp_comp)
+    surface['mesh'] = geometry_mesh(surface, comp_dict['GeometryMesh'])
+    surface['disp'] = np.zeros((surface['num_y'], 6), dtype=data_type)  # zero displacement
+    surface['def_mesh'] = transfer_displacements(surface['mesh'], surface['disp'], comp=comp_dict['TransferDisplacements'])
+    # Initialize remaining OpenAeroStruct components
     comp_dict['VLMGeometry'] = VLMGeometry(surface)
     comp_dict['AssembleAIC'] = AssembleAIC([surface])
     comp_dict['AeroCirculations'] = AeroCirculations(OAS_prob.prob_dict['tot_panels'])
@@ -260,6 +266,7 @@ def setup(prob_dict={}, surfaces=[{}]):
 
     return OAS_prob
 
+
 def b_spline(cpname, cpval, n_output, comp):
     ''' Add bspline components for active bspline geometric variables
         Note: keep n_input in as input argument for forward compatibility'''
@@ -272,6 +279,7 @@ def b_spline(cpname, cpval, n_output, comp):
     resids = {}
     comp.solve_nonlinear(params, unknowns, resids)
     return unknowns.get(comp.ptname)
+
 
 def gen_init_mesh(surface, comp_dict=None):
     ''' Generate initial def_mesh '''
@@ -287,10 +295,15 @@ def gen_init_mesh(surface, comp_dict=None):
         mesh = geometry_mesh(surface, comp_dict['GeometryMesh'])
         disp = np.zeros((surface['num_y'], 6), dtype=data_type)  # zero displacement
         def_mesh = transfer_displacements(mesh, disp, comp=comp_dict['TransferDisplacements'])
+        PRINT('@@@@@ mesh - def_mesh =',mesh-def_mesh)
     else:
         mesh = geometry_mesh(surface)
         disp = np.zeros((surface['num_y'], 6), dtype=data_type)  # zero displacement
         def_mesh = transfer_displacements(mesh, disp, surface)
+    # update the surface dictionary
+    surface['mesh'] = mesh
+    surface['disp'] = disp
+    surface['def_mesh'] = def_mesh
     return def_mesh
 
 
@@ -303,7 +316,6 @@ def aerodynamics(def_mesh, surface, prob_dict, comp_dict):
     size = prob_dict.get('tot_panels')
     rho = prob_dict.get('rho')
 
-    def_mesh = surface['def_mesh']
     b_pts, c_pts, widths, cos_sweep, lengths, normals, S_ref = vlm_geometry(def_mesh, comp_dict['VLMGeometry'])
     AIC, rhs= assemble_aic(surface, def_mesh, b_pts, c_pts, normals, v, alpha, comp_dict['AssembleAIC'])
     circulations = aero_circulations(AIC, rhs, comp_dict['AeroCirculations'])
@@ -429,7 +441,6 @@ def aero_perf(surface, prob_dict, comp_dict):
     return
 
 
-
 def struct_perf(surface, prob_dict, comp_dict):
     # unpack surface variables
     disp = surface.get('disp')
@@ -452,15 +463,6 @@ def struct_perf(surface, prob_dict, comp_dict):
         'failure': failure
     })
     return
-
-# def cp2pt(cp, jac):
-#     """
-#     General function to translate from control points to actual points
-#     using a b-spline representation.
-#     """
-#     pt = np.zeros(jac.shape[0])
-#     pt = jac.dot(cp)
-#     return pt
 
 
 def geometry_mesh(surface, comp=None):
@@ -514,36 +516,6 @@ def geometry_mesh(surface, comp=None):
     comp.solve_nonlinear(params, unknowns, resids)
     mesh = unknowns.get('mesh')
     return mesh
-
-
-# def b_spline_surface(surface):
-#     """
-#     General function to translate from control points to actual points
-#     using a b-spline representation.
-
-#     Parameters
-#     ----------
-#     cpname : string
-#         Name of the OpenMDAO component containing the control point values.
-#     ptname : string
-#         Name of the OpenMDAO component that will contain the interpolated
-#         b-spline values.
-#     n_input : int
-#         Number of input control points.
-#     n_output : int
-#         Number of outputted interpolated b-spline points.
-#     """
-#     comp = Bspline(cpname, ptname, n_input, n_output)
-#     params = {
-#         cpname: cpname
-#     }
-#     unknowns = {
-#         ptname: np.zeros(n_output)
-#     }
-#     resids = None
-#     comp.solve_nonlinear(params, unknowns, resids)
-#     ptname_out = unknowns.get(ptname)
-#     return ptname_out
 
 
 def transfer_displacements(mesh, disp, comp):
@@ -847,7 +819,7 @@ def transfer_loads(def_mesh, sec_forces, comp):
         'sec_forces': sec_forces
     }
     unknowns={
-        'loads': np.zeros((comp.ny, 6), dtype=complex)
+        'loads': np.zeros((comp.ny, 6), dtype=data_type)
     }
     resids=None
     comp.solve_nonlinear(params, unknowns, resids)
@@ -1561,13 +1533,11 @@ if __name__ == "__main__":
     # Define FPI parameters
     utol = fpi_opt['utol']
     maxiter = fpi_opt['maxiter']
-    # Generate initial mesh with zero deformation
-    def_mesh = gen_init_mesh(OASprob.surfaces[0], OASprob.comp_dict)
-    OASprob.surfaces[0]['def_mesh'] = def_mesh
+    # Use initial mesh with zero deformation
     surface = OASprob.surfaces[0]
-    x0 = f_aero(def_mesh, surface)*0.0
-    # x0 = np.zeros((f_aero(def_mesh,surface).size))
-    print(x0)
+    x0 = def_mesh = surface['def_mesh']
+    print('def_mesh.dtype=',def_mesh.dtype)
+    # x0 = f_aero(def_mesh, surface)*0.0
     u_norm = 1.0e99
     iter_count = 0
     # Run fixed point iteration on coupled aerodynamics-structures system
@@ -1575,8 +1545,8 @@ if __name__ == "__main__":
           # Update iteration counter
           iter_count += 1
           # Run iteration and evaluate norm of residual
-          loads = x = aerodynamics(x0, surface, OASprob.prob_dict, OASprob.comp_dict)
-          def_mesh = structures(loads, surface, OASprob.prob_dict, OASprob.comp_dict)
+          loads = aerodynamics(x0, surface, OASprob.prob_dict, OASprob.comp_dict)
+          def_mesh = x = structures(loads, surface, OASprob.prob_dict, OASprob.comp_dict)
           u_norm = np.linalg.norm(x - x0)
           x0 = x
 
@@ -1584,30 +1554,17 @@ if __name__ == "__main__":
         msg = 'FAILED to converge after {0:d} iterations'.format(iter_count)
     else:
         msg = 'Converged in {0:d} iterations'.format(iter_count)
-
     print(msg)
 
-    print('  -----  TEST ACCURACY  -----   ')
-    print('variable  |   analysis.py   |   run_classes.py')
-    print('----------------------------------------------')
-    var = 'b_pts'
-    print('{0:9s}|{a[b_pts]}|{b[coupled.wing.b_pts]}'.format(var,a=surface,b=stdOASprob.prob))
-    # b_pts, c_pts, widths, cos_sweep, lengths, normals, S_ref = vlm_geometry(def_mesh, comp_dict['VLMGeometry'])
-    # AIC, rhs= assemble_aic(surface, def_mesh, b_pts, c_pts, normals, v, alpha, comp_dict['AssembleAIC'])
-    # circulations = aero_circulations(AIC, rhs, comp_dict['AeroCirculations'])
-    # sec_forces = vlm_forces(surface, def_mesh, b_pts, circulations, alpha, v, rho, comp_dict['VLMForces'])
-    # loads = transfer_loads(def_mesh, sec_forces, comp_dict['TransferLoads'])
+    PRINT('def_mesh=',def_mesh.real)
+    PRINT('stdOASprob def_mesh=',stdOASprob.prob['coupled.wing.def_mesh'])
+    PRINT('def_mesh error=',def_mesh.real-stdOASprob.prob['coupled.wing.def_mesh'])
 
+    PRINT('loads=',loads.real)
+    PRINT('stdOASprob loads=',stdOASprob.prob['coupled.wing.loads'])
+    PRINT('loads error=',loads.real-stdOASprob.prob['coupled.wing.loads'])
 
-    print('def_mesh=\n',def_mesh.real)
-    print('stdOASprob def_mesh=\n',stdOASprob.prob['coupled.wing.def_mesh'])
-    print('def_mesh error=\n',def_mesh.real-stdOASprob.prob['coupled.wing.def_mesh'])
     print('np.linalg.norm(def_mesh error)=',np.linalg.norm(def_mesh.real-stdOASprob.prob['coupled.wing.def_mesh']))
-
-
-    print('loads=\n',loads.real)
-    print('stdOASprob loads=\n',stdOASprob.prob['coupled.wing.loads'])
-    print('loads error=\n',loads.real-stdOASprob.prob['coupled.wing.loads'])
     print('np.linalg.norm(loads error)=',np.linalg.norm(loads.real-stdOASprob.prob['coupled.wing.loads']))
 
     print('Evaluate functional components...')
@@ -1618,3 +1575,5 @@ if __name__ == "__main__":
     eq_con = functional_equilibrium([surface], surface['L'], surface['weight'], fuelburn, OASprob.prob_dict, OASprob.comp_dict['FunctionalEquilibrium'])
     print('fuelburn=',fuelburn.real)
     print('stdOASprob.prob[fuelburn]=',stdOASprob.prob['fuelburn'])
+    print('fuelburn abserr=',round(fuelburn.real-stdOASprob.prob['fuelburn'],3),
+          'relerr={}%'.format(round(abs(fuelburn.real-stdOASprob.prob['fuelburn'])/stdOASprob.prob['fuelburn']*100,3),'%'))
