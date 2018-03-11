@@ -1,24 +1,24 @@
 % This function sets up the coupled aerostructural system from the
-% OpenAeroStruct analysis/optimization problem in Python. See documentation 
+% OpenAeroStruct analysis/optimization problem in Python. See documentation
 % and source code at https://www.github.com/samtx/OpenAeroStruct
 % INPUTS:
 %  prob_dict  =  (struct) Specifies design variables and problem
 %                parameters.
-%  surf_list  =  (cell array) Cell array of structs defining the 
-%                lifting surfaces. 
+%  surf_list  =  (cell array) Cell array of structs defining the
+%                lifting surfaces.
 % OUTPUTS:
 %  OASobj     =  python object of OASProblem() to pass to OAS_run.m
 %
 % ------------------------   TROUBLESHOOTING   -------------------------
 % Python Module Not on Python Search Path
-% If command is a valid Python command, make sure the Python module is on the 
+% If command is a valid Python command, make sure the Python module is on the
 % Python search path. To test if module OpenAeroStruct is on the path, type:
-% 
+%
 % py.importlib.import_module('OpenAeroStruct')
 % If Python cannot find the module, MATLAB displays a Python error message.
-% 
+%
 % To add OpenAeroStruct, in folder OAS_PATH, to the PYTHONPATH, type:
-% 
+%
 % P = py.sys.path;
 % if count(P,'OAS_PATH') == 0
 %     insert(P,int32(0),'OAS_PATH');
@@ -30,18 +30,23 @@
 % can generate correct path string by changing to directory and
 % using pwd command in Matlab Command Window.
 
-
+try
+pyversion 'C:/users/samfriedman/repos/OpenAeroStruct/venv/Scripts/python.exe';  % use python executable in virtual environment
+catch
+end
 % MUST RUN THIS BEFORE LOADING PYTHON !!!!
+try  % this only works in Unix systems
 py.sys.setdlopenflags(int32(10));  % Set RTLD_NOW and RTLD_DEEPBIND
-
-OAS_PATH = '/general/home/samfriedman/OpenAeroStruct';
+catch
+end
+OAS_PATH = '../';  % relative path to main OpenAeroStruct directory
 %OAS_PATH = 'C:\Users\samfriedman\repos\OpenAeroStruct';
 P = py.sys.path;
 if count(P,OAS_PATH) == 0
     insert(P,int32(0),OAS_PATH);
 end
 
-py.importlib.import_module('OAS_run');
+oas_mod = py.importlib.import_module('OAS_run');
 
 % convert cell array of lifting surfaces to python list
 wing = struct;
@@ -74,7 +79,8 @@ prob_struct.optimize = false;
 prob_struct.with_viscous = true;
 prob_struct.cg = py.numpy.array([30., 0., 5.]);
 prob_struct.desvars = py.list;
-
+prob_struct.print_level = int64(0);
+prob_struct.record_db = false;
 
 OASobj = OAS_setup(prob_struct, surf_list);  % call matlab wrapper
 
@@ -84,28 +90,11 @@ desvars ={'alpha',3.2,}; %'tail.twist_cp',[2.3],'wing.thickness_cp',[5,4]};
 output = OAS_run(desvars,OASobj);  % call matlab wrapper
 
 % verify design point satisfies constraints
-tol = 0.1;
-if (abs(output.L_equals_W)< tol) && (output.wing_failure < 0) && (output.wing_thickness_intersects < 0) && (output.tail_failure < 0) && (output.tail_thickness_intersects < 0)
-  meets_constraints = true;
-else
-  meets_constraints = false;
-end
-
+% tol = 0.1;
+% if (abs(output.L_equals_W)< tol) && (output.wing_failure < 0) && (output.wing_thickness_intersects < 0) && (output.tail_failure < 0) && (output.tail_thickness_intersects < 0)
+%   meets_constraints = true;
+% else
+%   meets_constraints = false;
+% end
 
 disp(output)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-% dm = np2mat(def_mesh); % convert numpy ndarray to matlab array

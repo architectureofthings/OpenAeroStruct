@@ -35,8 +35,10 @@ function OASobj = OAS_setup(prob_struct, surf_list)
 % MUST RUN THIS BEFORE LOADING PYTHON !!!!
 % We might not need this if we use Intel-compiled Python/Scipy/Numpy with MKL instead of standard GCC and BLAS
 % see link for more info: https://www.mathworks.com/matlabcentral/answers/327193-calling-python-module-from-matlab-causes-segmentation-fault-in-h5py
+try  %only works in unix systems
 py.sys.setdlopenflags(int32(10));  % Set RTLD_NOW and RTLD_DEEPBIND
-
+catch
+end
 py.importlib.import_module('OAS_run');
 
 % convert matlab cell array of structs into python list of dicts

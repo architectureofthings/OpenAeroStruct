@@ -8,7 +8,7 @@ try
   mat = double(npary);
 catch
   % if array
-  sh = cellfun(@int32,cell(npary.shape));
+  sh = cellfun(@int64,cell(npary.shape));
   if length(sh) == 1
       % if a numpy 1D flattened array
       mat = double(py.array.array('d',npary));
