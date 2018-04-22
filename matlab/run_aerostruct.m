@@ -1,11 +1,20 @@
 
+
+py.sys.setdlopenflags(int32(10));  % Set RTLD_NOW and RTLD_DEEPBIND
+
 % load Python from virtual environment with OpenMDAO 1.7.3 installed
-[~,~,isloaded] = pyversion;
-if ~isloaded
-    pyversion 'C:\Users\Sam\repos\OpenAeroStruct\oasvenv\Scripts\python.exe'
-end
+%[~,~,isloaded] = pyversion;
+%if ~isloaded
+%    pyversion 'C:\Users\Sam\repos\OpenAeroStruct\oasvenv\Scripts\python.exe'
+%end
 
 % import OpenAeroStruct python module
+OAS_PATH = '/general/home/samfriedman';
+%OAS_PATH = 'C:\Users\samfriedman\repos\OpenAeroStruct';
+P = py.sys.path;
+if count(P,OAS_PATH) == 0
+    insert(P,int32(0),OAS_PATH);
+end
 py.importlib.import_module('OpenAeroStruct');
 
 prob_dict = struct;
@@ -33,10 +42,10 @@ surf_dict.num_thickness_cp = int32(2);
 % Add the specified wing surface to the problem
 OAS_prob.add_surface(surf_dict);
  
-% Add design variables, constraint, and objective on the problem
-OAS_prob.add_desvar('alpha', pyargs('lower',-10., 'upper',10.));
-OAS_prob.add_constraint('L_equals_W', pyargs('equals', 0.));
-OAS_prob.add_objective('fuelburn', pyargs('scaler', 1e-5));
+%% Add design variables, constraint, and objective on the problem
+%OAS_prob.add_desvar('alpha', pyargs('lower',-10., 'upper',10.));
+%OAS_prob.add_constraint('L_equals_W', pyargs('equals', 0.));
+%OAS_prob.add_objective('fuelburn', pyargs('scaler', 1e-5));
  
 % Multiple lifting surfaces
 surf_dict = struct;
@@ -52,14 +61,14 @@ surf_dict.twist_cp = mat2np([-9.5]); %#ok<NBRAK>
 OAS_prob.add_surface(surf_dict)
   
 % Add design variables and constraints for both the wing and tail
-OAS_prob.add_desvar('wing.twist_cp', pyargs('lower',-15.,'upper',15.));
-OAS_prob.add_desvar('wing.thickness_cp', pyargs('lower',0.01, 'upper',0.5, 'scaler',1e2));
-OAS_prob.add_constraint('wing_perf.failure', pyargs('upper',0.));
-OAS_prob.add_constraint('wing_perf.thickness_intersects', pyargs('upper',0.));
-OAS_prob.add_desvar('tail.twist_cp', pyargs('lower',-15., 'upper',15.));
-OAS_prob.add_desvar('tail.thickness_cp', pyargs('lower',0.01,'upper',0.5,'scaler',1e2));
-OAS_prob.add_constraint('tail_perf.failure', pyargs('upper',0.));
-OAS_prob.add_constraint('tail_perf.thickness_intersects', pyargs('upper',0.));
+%OAS_prob.add_desvar('wing.twist_cp', pyargs('lower',-15.,'upper',15.));
+%OAS_prob.add_desvar('wing.thickness_cp', pyargs('lower',0.01, 'upper',0.5, 'scaler',1e2));
+%OAS_prob.add_constraint('wing_perf.failure', pyargs('upper',0.));
+%OAS_prob.add_constraint('wing_perf.thickness_intersects', pyargs('upper',0.));
+%OAS_prob.add_desvar('tail.twist_cp', pyargs('lower',-15., 'upper',15.));
+%OAS_prob.add_desvar('tail.thickness_cp', pyargs('lower',0.01,'upper',0.5,'scaler',1e2));
+%OAS_prob.add_constraint('tail_perf.failure', pyargs('upper',0.));
+%OAS_prob.add_constraint('tail_perf.thickness_intersects', pyargs('upper',0.));
 
 % Setup problem
 OAS_prob.setup()

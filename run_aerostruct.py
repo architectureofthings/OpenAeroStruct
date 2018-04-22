@@ -49,7 +49,8 @@ if __name__ == "__main__":
     # Set problem type
     prob_dict = {'type' : 'aerostruct',
                  'with_viscous' : True,
-                 'cg' : np.array([30., 0., 5.])
+                 'cg' : np.array([30., 0., 5.]),
+		 'print_level' : 2
                  }
 
     if sys.argv[1].startswith('0'):  # run analysis once

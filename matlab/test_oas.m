@@ -1,3 +1,7 @@
+% TEST TEST TEST
+
+% Matlab routine to call OAS_run.OAS_setup
+
 % This function sets up the coupled aerostructural system from the
 % OpenAeroStruct analysis/optimization problem in Python. See documentation 
 % and source code at https://www.github.com/samtx/OpenAeroStruct
