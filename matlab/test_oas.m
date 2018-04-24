@@ -81,6 +81,7 @@ prob_struct.desvars = py.list;
 
 
 OASobj = OAS_setup(prob_struct, surf_list);  % call matlab wrapper
+fprintf('setup complete \n');
 
 % design variables for analysis
 desvars ={'alpha',3.2,}; %'tail.twist_cp',[2.3],'wing.thickness_cp',[5,4]};
@@ -89,14 +90,14 @@ output = OAS_run(desvars,OASobj);  % call matlab wrapper
 
 % verify design point satisfies constraints
 tol = 0.1;
-if (abs(output.L_equals_W)< tol) && (output.wing_failure < 0) && (output.wing_thickness_intersects < 0) && (output.tail_failure < 0) && (output.tail_thickness_intersects < 0)
+if (abs(output.L_equals_W)< tol) && all(output.wing_failure(:) < 0) && all(output.wing_thickness_intersects(:) < 0) && all(output.tail_failure(:) < 0) && all(output.tail_thickness_intersects(:) < 0)
   meets_constraints = true;
 else
   meets_constraints = false;
 end
 
 
-disp(output)
+%disp(output)
 
 
 

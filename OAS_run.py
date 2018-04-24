@@ -2,6 +2,7 @@
 
 from __future__ import print_function, division  # Python 2/3 compatability
 from six import iteritems   
+from collections import OrderedDict
 
 from os import sys, path
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
@@ -27,6 +28,7 @@ def OAS_setup(user_prob_dict={}, user_surf_list=[]):
         'optimize' : False,
         'with_viscous' : True,
         'cg' : np.array([30., 0., 5.]),
+        'print_level': 0,
         # default design variables, applied to all surfaces
         'des_vars' : [
             'alpha',
@@ -35,11 +37,13 @@ def OAS_setup(user_prob_dict={}, user_surf_list=[]):
             'wing.sweep',
             'wing.dihedral',
             'wing.taper',
+            'wing.span',
             'tail.thickness_cp',
             'tail.twist_cp',
             'tail.sweep',
             'tail.dihedral',
-            'tail.taper'
+            'tail.taper',
+            'tail.span'
         ],
         'output_vars' : [
             'fuelburn', 
@@ -80,12 +84,11 @@ def OAS_setup(user_prob_dict={}, user_surf_list=[]):
        surf_list = user_surf_list
 
     # remove surface des_vars key/value from surface dicts
+    surf_vars = []
     for surf in surf_list:
-        #print(surf)
-        if 'des_vars' in surf:
-            surf_vars = surf.pop('des_vars', None)
-            for var in surf_vars:
-                des_vars.append(surf['name']+'.'+var)
+	surf_vars += surf.pop('des_vars', [])
+	for var in surf_vars:
+            des_vars.append(surf['name']+'.'+var)
 
     # check that values in prob_dict and surf_list are the correct ones
     
@@ -122,6 +125,9 @@ def OAS_setup(user_prob_dict={}, user_surf_list=[]):
     # setup OpenMDAO components in OASProblem
     OASprob.setup()
 
+    # Note: change to prob.set_solver_print(level=0) when upgrading to OpenMDAO >= 2.0.0
+    #OASprob.prob.print_all_convergence(level=0)   # don't print any info during evaluation
+
     return OASprob
 
 def OAS_run(user_des_vars={}, OASprob=None, *args, **kwargs):
@@ -130,7 +136,7 @@ def OAS_run(user_des_vars={}, OASprob=None, *args, **kwargs):
         OASprob = OAS_setup()
 
     # set print option
-    iprint = kwargs.get('iprint',0)  # set default to only print errors and convergence failures
+    #iprint = kwargs.get('iprint',0)  # set default to only print errors and convergence failures
 
     # set design variables
     if user_des_vars:
@@ -142,16 +148,18 @@ def OAS_run(user_des_vars={}, OASprob=None, *args, **kwargs):
             OASprob.prob[var] = value
     #print('run OAS')
     
-    print('INPUT:')
-    print(OASprob.prob.driver.desvars_of_interest())
-    #for key, val in iteritems(OASprob.prob._desvars):
-    #    print(key+'=',val)
     
     
     OASprob.run()
     #print('after run OAS') 
     
-    output = {}
+    output = OrderedDict()
+
+    # add input variables to output dictionary
+    # input_vars = set(user_des_vars) + set(OASprob.prob.
+    for item in OASprob.prob.driver._desvars:
+        output[item] = OASprob.prob[item]
+
     # get overall output variables and constraints, return None if not there
     overall_vars = ['fuelburn','CD','CL','L_equals_W','CM','v','rho','cg','weighted_obj','total_weight']
     for item in overall_vars:
@@ -181,19 +189,76 @@ def OAS_run(user_des_vars={}, OASprob=None, *args, **kwargs):
         for key, val in iteritems(coupling_var_map):
             output.update({surf['name']+key:OASprob.prob[val.replace('<name>',surf['name'][:-1])]})
             
-    # pretty print output
-    #print('OUTPUT:')
-    #print(OASprob.prob.driver.outputs_of_interest())
-    #for key, val in iteritems(OASoutput):
-    #    print(key+' = ',val)
     
     return output
 
 if __name__ == "__main__":
     print('--INIT--')
-    OASobj = OAS_setup()
-    desvars = {'alpha':0.25}
+
+    prob_dict = {
+        'type': 'aerostruct',
+        'optimize': False,
+        'with_viscous': True,
+        'cg': np.array([30., 0., 5.]),
+        'desvars': [],
+	'record_db': True,
+	'print_level': 0
+    }
+    surf_list = [
+	{
+            'name': 'wing',
+	    'num_y': 7,
+            'num_x': 3,
+	    'wing_type': 'CRM',
+            'CD0': 0.015,
+            'symmetry': True,
+            'num_twist_cp': 2,
+            'num_thickness_cp': 2,
+            'exact_failure_constraint': True,
+	    'chord_cp': np.array([0.5, 0.9, 1.2, 2.7]),
+	    'span_cos_spacing': 0.5
+        },
+        {
+            'name': 'tail',
+	    'num_y': 7,
+            'num_x': 3,
+	    'wing_type': 'rect',
+            'exact_failure_constraint': True,
+            'root_chord': 5.0,
+            'offset': np.array([50., 0., 5.]),
+            'twist_cp': np.array([-9.5]),
+            'span': 20.
+        }
+    ]
+    OASobj = OAS_setup(prob_dict, surf_list)
+    #print('INPUT:')
+    #print(OASobj.prob.driver.desvars_of_interest())
+    #for key, val in iteritems(OASobj.prob.driver._desvars):
+    #    print(key+'=',OASobj.prob[key])
+    desvars = {
+	'alpha':0.25,
+	'wing.twist_cp':0.,
+	'wing.thickness_cp':0.1,
+	'wing.taper':0.75,
+	'wing.dihedral':1.,
+	'wing.sweep':1.,
+	'wing.span':65.,
+	'wing.chord_cp':1.0
+    }
     out = OAS_run(desvars,OASobj)
+
+    print('Desvars of interest:')
+    print(OASobj.prob.driver.desvars_of_interest())
+    # pretty print input
+    print('INPUT:')
+    for item in OASobj.prob.driver._desvars:
+	print(item+' = ',out[item])
+
+    # pretty print output
+    print('OUTPUT:')
+    # print(OASprob.prob.driver.outputs_of_interest())
+    for key, val in iteritems(out):
+        print(key+' = ',val)
     print('--END--')
     #print(out)
 
