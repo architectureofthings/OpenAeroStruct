@@ -1,3 +1,7 @@
+% TEST TEST TEST
+
+% Matlab routine to call OAS_run.OAS_setup
+
 % This function sets up the coupled aerostructural system from the
 % OpenAeroStruct analysis/optimization problem in Python. See documentation
 % and source code at https://www.github.com/samtx/OpenAeroStruct
@@ -83,6 +87,7 @@ prob_struct.print_level = int64(0);
 prob_struct.record_db = false;
 
 OASobj = OAS_setup(prob_struct, surf_list);  % call matlab wrapper
+fprintf('setup complete \n');
 
 % design variables for analysis
 desvars ={'alpha',3.2,}; %'tail.twist_cp',[2.3],'wing.thickness_cp',[5,4]};
