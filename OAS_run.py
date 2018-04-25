@@ -1,7 +1,7 @@
 # python function which runs aerostruct analysis based on dict input
 
 from __future__ import print_function, division  # Python 2/3 compatability
-from six import iteritems
+from six import iteritems, iterkeys
 from collections import OrderedDict
 
 from os import sys, path
@@ -27,7 +27,7 @@ def OAS_setup(user_prob_dict={}, user_surf_list=[]):
         'type' : 'aerostruct',
         'optimize' : False,
         # default design variables, applied to all surfaces
-        'des_vars' : []
+        'des_vars' : ['alpha']
     }
 
     surf_dict = {
@@ -37,7 +37,7 @@ def OAS_setup(user_prob_dict={}, user_surf_list=[]):
         'num_y': 7,
         'des_vars': ['thickness_cp','twist_cp','xshear_cp',
                     'yshear_cp','zshear_cp','radius_cp',
-                    'dihedral','sweep','span','chord_cp','alpha','taper']
+                    'dihedral','sweep','span','chord_cp','taper']
     }
 
     surf_list = []
@@ -47,7 +47,7 @@ def OAS_setup(user_prob_dict={}, user_surf_list=[]):
     prob_dict.update(user_prob_dict)
 
     # remove 'des_vars' key and value from prob_dict
-    des_vars = prob_dict.pop('des_vars')
+    des_vars = prob_dict.get('des_vars')
 
     if user_surf_list:
        #print('user surf')
@@ -56,7 +56,7 @@ def OAS_setup(user_prob_dict={}, user_surf_list=[]):
     # remove surface des_vars key/value from surface dicts
     surf_des_vars = []
     for surf in surf_list:
-        surf_des_vars = surf.pop('des_vars', [])
+        surf_des_vars = surf.get('des_vars', [])
         for var in surf_des_vars:
 	       des_vars.append(surf['name']+'.'+var)
 
@@ -137,6 +137,21 @@ def OAS_run(user_des_vars={}, OASprob=None, *args, **kwargs):
     return output
 
 
+def OAS_run_matlab(*args, **kwargs):
+    '''
+    OAS_run() with output dict keys changed from '.' to '_' to work with
+    matlab struct object
+    '''
+    output = OAS_run(*args, **kwargs)
+    output_keys = list(output.keys())
+    for key in output_keys:
+        newkey = key.replace('.','_')
+        val = output.pop(key)
+        output[newkey] = val
+
+    return output
+
+
 if __name__ == "__main__":
     print('--INIT--')
     prob_dict = {
@@ -178,8 +193,8 @@ if __name__ == "__main__":
         }
     ]
     OASobj = OAS_setup(prob_dict, surf_list)
-    #print('INPUT:')
-    #print(OASobj.prob.driver.desvars_of_interest())
+    print('INPUT:')
+    print(OASobj.prob.driver.desvars_of_interest())
     #for key, val in iteritems(OASobj.prob.driver._desvars):
     #    print(key+'=',OASobj.prob[key])
     desvars = {
@@ -192,19 +207,17 @@ if __name__ == "__main__":
 	'wing.span':65.,
 	# 'wing.chord_cp': np.array([0.5, 0.9, 1.]),
     }
-    out = OAS_run(desvars,OASobj)
+    out = OAS_run_matlab(desvars,OASobj)
 
     print('Desvars of interest:')
     print(OASobj.prob.driver.desvars_of_interest())
     # pretty print input
     print('INPUT:')
-    for item in OASobj.prob.driver._desvars:
-	print(item+' = ',out[item])
+    # for item in OASobj.prob.driver._desvars:
+	#        print(item+' = ',out[item])
 
     # pretty print output
     print('OUTPUT:')
-    # print(OASprob.prob.driver.outputs_of_interest())
     for key, val in iteritems(out):
         print(key+' = ',val)
     print('--END--')
-    #print(out)
