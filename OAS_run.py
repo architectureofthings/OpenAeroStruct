@@ -137,12 +137,12 @@ def OAS_run(user_des_vars={}, OASprob=None, *args, **kwargs):
     return output
 
 
-def OAS_run_matlab(*args, **kwargs):
+def OAS_run_matlab(user_des_vars={}, OASprob=None, *args, **kwargs):
     '''
     OAS_run() with output dict keys changed from '.' to '_' to work with
     matlab struct object
     '''
-    output = OAS_run(*args, **kwargs)
+    output = OAS_run(user_des_vars, OASprob, *args, **kwargs)
     output_keys = list(output.keys())
     for key in output_keys:
         newkey = key.replace('.','_')
@@ -171,8 +171,8 @@ if __name__ == "__main__":
 	        'wing_type': 'CRM',
             'CD0': 0.015,
             'symmetry': True,
-            'num_twist_cp': 2,
-            'num_thickness_cp': 2,
+            'num_twist_cp': 1,
+            'num_thickness_cp': 1,
             'exact_failure_constraint': True,
 	        'span_cos_spacing': 0.5,
             'des_vars': ['twist_cp','xshear_cp','thickness_cp','twist_cp','xshear_cp',
@@ -198,13 +198,14 @@ if __name__ == "__main__":
     #for key, val in iteritems(OASobj.prob.driver._desvars):
     #    print(key+'=',OASobj.prob[key])
     desvars = {
-	'alpha':0.25,
-	'wing.twist_cp':[0,0],
-	'wing.thickness_cp':[0.001,0.2],
-	'wing.taper':1,
-	'wing.dihedral':1.,
-	'wing.sweep':1.,
-	'wing.span':65.,
+	'alpha': -5,
+	'wing.twist_cp': [-15],
+	'wing.thickness_cp':[0.001],
+    'wing.chord_cp': [0.6],
+	'wing.taper': 0.2,
+	'wing.dihedral': -10.,
+	'wing.sweep':- 10.,
+	'wing.span':50.,
 	# 'wing.chord_cp': np.array([0.5, 0.9, 1.]),
     }
     out = OAS_run_matlab(desvars,OASobj)
