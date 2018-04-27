@@ -56,18 +56,21 @@ oas_mod = py.importlib.import_module('OAS_run');
 wing = struct;
 wing.name = 'wing';
 wing.num_y = int32(7);
-wing.num_x = int32(2);
+wing.num_x = int32(3);
 wing.wing_type = 'CRM';
 wing.CD0 = 0.015;
 wing.symmetry = true;
-wing.num_twist_cp = int32(2);
-wing.num_thickness_cp = int32(2);
+wing.num_twist_cp = int32(1);
+wing.num_thickness_cp = int32(1);
 wing.exact_failure_constraint = true;
+wing.span_cos_spacing = 0.5;
+wing.des_vars = py.list({'thickness_cp','twist_cp','dihedral','sweep','span','chord_cp','taper',...
+                         'xshear_cp','yshear_cp','zshear_cp','radius_cp'});
 
 tail = struct;
 tail.name = 'tail';
 tail.num_y = int32(7);
-tail.num_x = int32(2);
+tail.num_x = int32(3);
 tail.span = 20.0;
 tail.root_chord = 5.0;
 tail.wing_type = 'rect';
@@ -81,17 +84,29 @@ prob_struct = struct;
 prob_struct.type = 'aerostruct';
 prob_struct.optimize = false;
 prob_struct.with_viscous = true;
-prob_struct.cg = py.numpy.array([30., 0., 5.]);
-prob_struct.desvars = py.list;
-prob_struct.print_level = int64(0);
-prob_struct.record_db = false;
+prob_struct.cg = py.numpy.array([70., 0., 15.]);
+prob_struct.desvars = py.list({'alpha'});
+prob_struct.print_level = int64(2);
+%prob_struct.record_db = false;
 
 OASobj = OAS_setup(prob_struct, surf_list);  % call matlab wrapper
 fprintf('setup complete \n');
 
 % design variables for analysis
-desvars ={'alpha',3.2,}; %'tail.twist_cp',[2.3],'wing.thickness_cp',[5,4]};
-
+desvars ={...
+	'alpha',-5,...
+	'wing.twist_cp',-10,...
+	'wing.thickness_cp',0.001,...
+	'wing.dihedral',-1,...
+	'wing.sweep',-1,...
+	'wing.span',60,...
+	'wing.taper',1.5,...
+	'wing.chord_cp',0.9};
+ %'tail.twist_cp',[2.3],'wing.thickness_cp',[5,4]};
+%for i = 1:2:length(desvars)
+%     fprintf('%s, %f \n',[desvars{i}, desvars{i+1}]);
+%end
+disp(desvars)
 output = OAS_run(desvars,OASobj);  % call matlab wrapper
 
 % verify design point satisfies constraints

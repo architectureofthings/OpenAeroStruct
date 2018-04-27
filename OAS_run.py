@@ -158,31 +158,31 @@ if __name__ == "__main__":
         'type': 'aerostruct',
         'optimize': False,
         'with_viscous': True,
-	    'record_db': True,
-	    'print_level': 0,
+        'record_db': True,
+	'print_level': 0,
         'des_vars': ['alpha'],
         'cg': np.array([70., 0., 15.])
     }
     surf_list = [
-	   {
+	{
             'name': 'wing',
-	        'num_y': 13,
-            'num_x': 5,
-	        'wing_type': 'CRM',
+	    'num_y': 7,
+            'num_x': 3,
+	    'wing_type': 'CRM',
             'CD0': 0.015,
             'symmetry': True,
-            'num_twist_cp': 1,
-            'num_thickness_cp': 1,
+            'num_twist_cp': 2,
+            'num_thickness_cp': 2,
+            'num_chord_cp': 2,
             'exact_failure_constraint': True,
-	        'span_cos_spacing': 0.5,
-            'des_vars': ['twist_cp','xshear_cp','thickness_cp','twist_cp','xshear_cp',
-                        'yshear_cp','zshear_cp','radius_cp','dihedral','sweep','span','chord_cp','taper']
+	    'span_cos_spacing': 0.5,
+            'des_vars': ['twist_cp','xshear_cp','thickness_cp','twist_cp','xshear_cp','yshear_cp','zshear_cp','radius_cp','dihedral','sweep','span','chord_cp','taper']
         },
         {
             'name': 'tail',
-	        'num_y': 7,
+	    'num_y': 7,
             'num_x': 3,
-	        'wing_type': 'rect',
+	    'wing_type': 'rect',
             'exact_failure_constraint': True,
             'root_chord': 5.0,
             'offset': np.array([50., 0., 5.]),
@@ -197,18 +197,82 @@ if __name__ == "__main__":
     print(OASobj.prob.driver.desvars_of_interest())
     #for key, val in iteritems(OASobj.prob.driver._desvars):
     #    print(key+'=',OASobj.prob[key])
+
+    # Get fuelburn for several twist_cp, thickness_cp, and alpha values
+    n = 10
+    #twist_cp = np.zeros(2, n)
+    lb = [-3., -10., 0.005, 60., 0.9]
+    ub = [ 3.,  10., 0.200, 75., 1.1]
+    alpha = np.linspace(lb[0],ub[0],num=n,dtype=np.float)
+    twist_cp = np.linspace(lb[1],ub[1],num=n,dtype=np.float)
+    thickness_cp = np.linspace(lb[2],ub[2],num=n,dtype=np.float)
+    span = np.linspace(lb[3],ub[3],num=n,dtype=np.float)
+    chord_cp = np.linspace(lb[4],ub[4],num=n,dtype=np.float)
+    outstr = 'Bounds: '
+    outstr += 'alpha=({:.2f},{:.2f})'.format(lb[0],ub[0])
+    outstr += 'twist_cp=({:.1f},{:.1f})'.format(lb[1],ub[1])
+    outstr += 'thickness_cp=({:.3f},{:.3f})'.format(lb[2],ub[2])
+    outstr += 'span=({:.1f},{:.1f})'.format(lb[3],ub[3])
+    outstr += 'chord_cp=({:.2f},{:.2f})'.format(lb[4],ub[4])
+    print(outstr)
+    # get design variable meshgrid
+    X = np.array(np.meshgrid(alpha,twist_cp,twist_cp,thickness_cp,thickness_cp,span,chord_cp,chord_cp)).T.reshape(-1,8)  # from StackOverflow: https://stackoverflow.com/questions/1208118/using-numpy-to-build-an-array-of-all-combinations-of-two-arrays
+    
+    # randomly select m rows from DOE
+    m = 500
+    idx = np.random.randint(X.shape[0], size=m)
+    X = X[idx,:]
+    print(twist_cp)
+    print(X.shape)
+    print(X)
+    fuelburn = np.zeros(X.shape[0])
+    thickness_constraint = np.zeros(X.shape[0])
+    failure_constraint = np.zeros(X.shape[0]) 
     desvars = {
-	'alpha': -5,
-	'wing.twist_cp': [-15],
-	'wing.thickness_cp':[0.001],
-    'wing.chord_cp': [0.6],
-	'wing.taper': 0.2,
-	'wing.dihedral': -10.,
-	'wing.sweep':- 10.,
-	'wing.span':50.,
-	# 'wing.chord_cp': np.array([0.5, 0.9, 1.]),
+	'alpha': 0.,
+	'wing.twist_cp': np.zeros(2),
+	'wing.thickness_cp': np.zeros(2),
+	'wing.span': 0.,
+    	'wing.chord_cp': np.zeros(2) ,
+   	#   'wing.taper': 0.2,
+    	#   'wing.dihedral': -10.,
+    	#   'wing.sweep':- 10.,
+	#   'wing.chord_cp': np.array([0.5, 0.9, 1.]),
     }
-    out = OAS_run_matlab(desvars,OASobj)
+    for i in range(X.shape[0]):
+        desvars = {
+            'alpha': X[i,0],
+            'wing.twist_cp': X[i,1:2],
+            'wing.thickness_cp': X[i,3:4],
+            'wing.span':X[i,5],
+            'wing.chord_cp':X[i,6:7]
+        }
+	#for key, val in iteritems(OASobj.prob.driver._desvars):
+	#    print(key+'='+str(val))
+    	out = OAS_run(desvars,OASobj)
+	#print(out)
+        fuelburn[i] = out['fuelburn']
+        failure_constraint[i] = np.max(out['wing_failure'])
+        thickness_constraint[i] = np.max(out['wing_thickness_intersects'])
+        outstr = ''
+        outstr += 'samp i={:4d} '.format(i)
+        outstr += 'alpha={:7.2f} '.format(X[i,0])
+        outstr += 'twist_cp=[{:6.2f},{:6.2f}] '.format(X[i,1],X[i,2])
+        outstr += 'thick_cp=[{:7.3f},{:7.3f}] '.format(X[i,3],X[i,4])
+        outstr += 'span={:5.1f} '.format(X[i,5])
+        outstr += 'chord_cp=[{:6.2f},{:6.2f}] '.format(X[i,6],X[i,7])
+        outstr += 'fulbrn={:10.0f} '.format(fuelburn[i])
+        outstr += 'fail={:7.3f} '.format(failure_constraint[i])
+        outstr += 'thckinters={:7.3f}'.format(thickness_constraint[i]) 
+        print(outstr)
+   	 
+    # Print stats
+    print('Fuelburn: ')
+    print(' max={:12f}'.format(np.max(fuelburn)))
+    print(' min={:12f}'.format(np.min(fuelburn)))
+    print('mean={:12f}'.format(np.mean(fuelburn)))
+    print(' med={:12f}'.format(np.median(fuelburn)))
+    print(' var={:12f}'.format(np.var(fuelburn)))
 
     print('Desvars of interest:')
     print(OASobj.prob.driver.desvars_of_interest())
@@ -222,3 +286,5 @@ if __name__ == "__main__":
     for key, val in iteritems(out):
         print(key+' = ',val)
     print('--END--')
+# python function which runs aerostruct analysis based on dict input
+
